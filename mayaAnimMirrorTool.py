@@ -3,10 +3,22 @@ import maya.cmds as cmds
 import  maya.mel as mel
 
 
-#処理させたいノードのルートをあらかじめ選択して実行する前提で、選択からジョイントのルートを取得
+#ターゲットになるコントローラー名
+Target_List = [
+    "Chr:CN_Bip001_ik_Hand_L"
+    "Chr:CN_Bip001_ik_Hand_R"
+]
 
+targetList = [n for n in targetList if cmds.objExists(n)]
+
+if not targetList:
+    cmds.error('Target nodes were not found.')
+
+
+#処理させたいノードのルートをあらかじめ選択して実行する前提で、選択からジョイントのルートを取得
 rootNode = cmds.ls(sl=True)[0]
 #mel.eval('GoToBindPose;')
+
 
 #jointList = cmds.ls(rootNode,dag = True,type = 'joint')
 targetList = cmds.ls(rootNode,dag = True,type = 'transform')
