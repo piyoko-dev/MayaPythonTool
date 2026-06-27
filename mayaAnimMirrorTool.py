@@ -6,9 +6,11 @@ import  maya.mel as mel
 #処理させたいノードのルートをあらかじめ選択して実行する前提で、選択からジョイントのルートを取得
 
 rootNode = cmds.ls(sl=True)[0]
-mel.eval('GoToBindPose;')
+#mel.eval('GoToBindPose;')
 
-jointList = cmds.ls(rootNode,dag = True,type = 'joint')
+#jointList = cmds.ls(rootNode,dag = True,type = 'joint')
+targetList = cmds.ls(rootNode,dag = True,type = 'transform')
+print("targetList:", targetList)
 
 inputLocList = [] 
 culNodeList = []
@@ -18,14 +20,14 @@ outputOffsetList = []
 
 
 #各ジョイントごとの処理
-for j in jointList:
+for j in targetList:
     #あらかじめ反転対象のジョイントを探しておく
     mirrorJoint = j 
     if '_L' in j:
         mirrorJoint = j.replace('_L','_R') 
     elif '_R' in j:
         mirrorJoint = j.replace('_R','_L') 
-    if not mirrorJoint in jointList:
+    if not mirrorJoint in targetList:
         #ミラー対象が見当たらなければ処理をスキップ
         continue
     #各ジョイントごとにTransformノードを作り、コンストレインで接続
@@ -173,20 +175,20 @@ for node in culNodeList:
     if cmds.objExists(node):cmds.delete(node)
 
 
-for j in jointList:
+for j in targetList:
     scsJoint = j
-    if 'Left' in j:
-        scsJoint = j.replace('Left','Right') 
-    elif 'Right' in j:
-        scsJoint = j.replace('Right','Left')
-    if not scsJoint in outputLocDict.keys():
+    if '_L' in j:
+        scsJoint = j.replace('_L','_R') 
+    elif '_R' in j:
+        scsJoint = j.replace('_R','_L')
+    if scsJoint not in outputLocDict.keys():
         continue
 
-cmds.pointConstraint(outputLocDict[scsJoint],j) 
-cmds.orientConstraint(outputLocDict[scsJoint],j)
+    cmds.pointConstraint(outputLocDict[scsJoint],j) 
+    cmds.orientConstraint(outputLocDict[scsJoint],j)
 
 #反転アニメーションをベイク
-cmds.bakeResults(jointList,sm = True,
+cmds.bakeResults(targetList,sm = True,
     t = (st,et),at = ('tx','ty','tz','rx','ry','rz')) 
 
 #不要になったoutputノード群は削除
