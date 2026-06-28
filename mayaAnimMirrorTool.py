@@ -1,220 +1,478 @@
 # -*- coding: utf-8 -*-
 import maya.cmds as cmds
 
-MIRROR_SIGN_ATTRS = set(['translateX', 'rotateY', 'rotateZ'])
-NAME_PAIRS = [('_L', '_R'), ('_R', '_L'), ('L_', 'R_'), ('R_', 'L_')]
-TRANSFORM_ATTRS = [
-    'translateX', 'translateY', 'translateZ',
-    'rotateX', 'rotateY', 'rotateZ',
-    'scaleX', 'scaleY', 'scaleZ'
+
+ALL_ATTRS = [
+    "translateX", "translateY", "translateZ",
+    "rotateX", "rotateY", "rotateZ"
 ]
-WINDOW_NAME = 'mayaAnimMirrorToolWin'
+
+GRP_A_KEYWORDS = ["COG", "Chest", "Pelvis"]
+GRP_B_KEYWORDS = ["Hand", "Foot"]
+GRP_C_KEYWORDS = ["Finger", "Shoulder", "Toe"]
+GRP_D_KEYWORDS = ["upVector", "LegVector"]
+
+GRP_A_INVERT_ATTRS = ["translateX", "rotateY", "rotateZ"]
+
+GRP_B_INVERT_ATTRS = [
+    "translateX", "translateY", "translateZ",
+    "rotateY", "rotateZ"
+]
+
+GRP_C_INVERT_ATTRS = ["rotateY", "rotateZ"]
+GRP_D_INVERT_ATTRS = ["translateX"]
 
 
-def to_list(value):
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple)):
-        return list(value)
-    return [value]
+def get_short_name(node):
+    return node.split("|")[-1]
 
 
-def short_name(node):
-    return node.split('|')[-1]
+def remove_namespace(node):
+    short_name = get_short_name(node)
+    if ":" in short_name:
+        return short_name.split(":")[-1]
+    return short_name
 
 
-def no_namespace(name):
-    return name.split(':')[-1]
+def get_namespace(node):
+    short_name = get_short_name(node)
+    if ":" in short_name:
+        return short_name.rsplit(":", 1)[0] + ":"
+    return ""
 
 
-def mirror_name(name):
-    for a, b in NAME_PAIRS:
-        if a in name:
-            return name.replace(a, b, 1)
+def get_transform(node):
+    if not cmds.objExists(node):
+        return None
+
+    if cmds.nodeType(node) == "transform":
+        return node
+
+    parent = cmds.listRelatives(node, parent=True, fullPath=True) or []
+    if parent:
+        return parent[0]
+
     return None
 
 
-def get_selected_nodes(include_hierarchy=True):
-    selected = cmds.ls(selection=True, long=True, type='transform') or []
-    result = []
+def is_target_rig(node):
+    shapes = cmds.listRelatives(
+        node,
+        shapes=True,
+        noIntermediate=True,
+        fullPath=True
+    ) or []
+
+    for shape in shapes:
+        if cmds.nodeType(shape) in ["nurbsCurve", "mesh", "nurbsSurface"]:
+            return True
+
+    return False
+
+
+def get_selected_rigs():
+    selected = cmds.ls(sl=True, long=True) or []
+
+    if not selected:
+        cmds.warning(u"オブジェクトを選択してください")
+        return []
+
+    rigs = []
+    exists = set()
 
     for node in selected:
-        if node not in result:
-            result.append(node)
+        transform = get_transform(node)
 
-        if include_hierarchy:
-            children = cmds.listRelatives(
-                node,
-                allDescendents=True,
-                fullPath=True,
-                type='transform'
-            ) or []
-            for child in children:
-                if child not in result:
-                    result.append(child)
+        if not transform:
+            continue
 
-    return result
+        if not is_target_rig(transform):
+            continue
 
+        if transform in exists:
+            continue
 
-def make_lookup(nodes):
-    lookup = {}
-    for node in nodes:
-        s = short_name(node)
-        lookup[s] = node
-        ns = no_namespace(s)
-        if ns not in lookup:
-            lookup[ns] = node
-    return lookup
+        exists.add(transform)
+        rigs.append(transform)
+
+    if not rigs:
+        cmds.warning(u"NURBS Curve / Mesh / NURBS Surface のリグを選択してください")
+
+    return rigs
 
 
-def find_mirror_node(node, lookup):
-    s = short_name(node)
-    m = mirror_name(s)
-    if m and m in lookup:
-        return lookup[m]
+def contains_keyword(node, keywords):
+    original_name = remove_namespace(node)
 
-    ns = no_namespace(s)
-    m = mirror_name(ns)
-    if m and m in lookup:
-        return lookup[m]
+    for keyword in keywords:
+        if keyword in original_name:
+            return True
+
+    return False
+
+
+def is_attr_available(node, attr):
+    plug = node + "." + attr
+
+    if not cmds.objExists(plug):
+        return False
+
+    try:
+        if cmds.getAttr(plug, lock=True):
+            return False
+    except:
+        return False
+
+    return True
+
+
+def get_playback_range():
+    start = int(cmds.playbackOptions(q=True, min=True))
+    end = int(cmds.playbackOptions(q=True, max=True))
+    return start, end
+
+
+def find_node_by_short_name(short_name):
+    result = cmds.ls(short_name, type="transform", long=True) or []
+
+    if result:
+        return result[0]
+
+    all_transforms = cmds.ls(type="transform", long=True) or []
+
+    for node in all_transforms:
+        if get_short_name(node) == short_name:
+            return node
 
     return None
 
 
-def attr_exists(attr):
-    return cmds.objExists(attr)
+def get_mirror_object(obj):
+    namespace = get_namespace(obj)
+    original_name = remove_namespace(obj)
 
-
-def is_settable(attr):
-    try:
-        return (not cmds.getAttr(attr, lock=True)) and bool(cmds.getAttr(attr, settable=True))
-    except Exception:
-        return False
-
-
-def get_key_times(attr, start_frame, end_frame):
-    return to_list(cmds.keyframe(attr, query=True, time=(start_frame, end_frame), timeChange=True))
-
-
-def get_value(attr, frame):
-    data = to_list(cmds.keyframe(attr, query=True, time=(frame, frame), valueChange=True))
-    if data:
-        return data[0]
-    try:
-        return cmds.getAttr(attr, time=frame)
-    except Exception:
+    if "_L" in original_name:
+        mirror_name = original_name.replace("_L", "_R", 1)
+    elif "_R" in original_name:
+        mirror_name = original_name.replace("_R", "_L", 1)
+    else:
         return None
 
+    mirror_short_name = namespace + mirror_name
+    mirror_obj = find_node_by_short_name(mirror_short_name)
 
-def set_value(attr, frame, value):
-    if value is None or not is_settable(attr):
+    return mirror_obj
+
+
+def copy_animation_data(obj, attrs, start, end):
+    anim_data = {}
+
+    for attr in attrs:
+        if not cmds.objExists(obj + "." + attr):
+            continue
+
+        anim_data[attr] = []
+
+        for frame in range(start, end + 1):
+            cmds.currentTime(frame, edit=True)
+
+            try:
+                value = cmds.getAttr(obj + "." + attr)
+                anim_data[attr].append((frame, value))
+            except:
+                pass
+
+    return anim_data
+
+
+def delete_keys(obj, attrs, start, end):
+    for attr in attrs:
+        if not is_attr_available(obj, attr):
+            continue
+
+        try:
+            cmds.cutKey(
+                obj,
+                attribute=attr,
+                time=(start, end),
+                option="keys"
+            )
+        except:
+            pass
+
+
+def paste_animation_data(obj, anim_data, invert_attrs):
+    for attr, keys in anim_data.items():
+        if not is_attr_available(obj, attr):
+            continue
+
+        for frame, value in keys:
+            cmds.currentTime(frame, edit=True)
+
+            paste_value = value
+
+            if attr in invert_attrs:
+                paste_value = value * -1.0
+
+            try:
+                cmds.setAttr(obj + "." + attr, paste_value)
+
+                if attr in ["rotateX", "rotateY", "rotateZ"]:
+                    cmds.setKeyframe(
+                        obj,
+                        attribute=attr,
+                        minimizeRotation=True
+                    )
+                else:
+                    cmds.setKeyframe(
+                        obj,
+                        attribute=attr
+                    )
+
+            except:
+                pass
+
+
+def set_rotation_curves_quaternion(obj):
+    rotate_attrs = ["rotateX", "rotateY", "rotateZ"]
+
+    for attr in rotate_attrs:
+        plug = obj + "." + attr
+
+        anim_curves = cmds.listConnections(
+            plug,
+            source=True,
+            destination=False,
+            type="animCurve"
+        ) or []
+
+        for curve in anim_curves:
+            try:
+                cmds.rotationInterpolation(
+                    curve,
+                    conversion="quaternionSlerp"
+                )
+            except:
+                pass
+
+
+def create_temp_locator_from_anim(obj, anim_data):
+    base_name = remove_namespace(obj)
+    locator_name = base_name + "_Locator"
+
+    locator = cmds.spaceLocator(name=locator_name)[0]
+
+    print("Create temp locator : {}".format(locator))
+
+    paste_animation_data(
+        locator,
+        anim_data,
+        invert_attrs=[]
+    )
+
+    return locator
+
+
+def mirror_single_rig(obj, start, end, invert_attrs):
+    anim_data = copy_animation_data(
+        obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    delete_keys(
+        obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    paste_animation_data(
+        obj,
+        anim_data,
+        invert_attrs
+    )
+
+    set_rotation_curves_quaternion(obj)
+
+
+def mirror_pair_rig(obj, start, end, invert_attrs):
+    mirror_obj = get_mirror_object(obj)
+
+    if not mirror_obj:
+        cmds.warning(
+            u"{} の対になるオブジェクトが見つかりません".format(obj)
+        )
         return
-    try:
-        cmds.setKeyframe(attr, time=frame, value=value)
-    except Exception:
-        pass
 
+    obj_name = remove_namespace(obj)
 
-def mirror_value(attr_name, value):
-    if value is None:
-        return None
-    if attr_name in MIRROR_SIGN_ATTRS:
-        return value * -1.0
-    return value
-
-
-def get_target_attrs(node_a, node_b):
-    attrs = []
-    keyable = cmds.listAttr(node_a, keyable=True) or []
-
-    for attr_name in TRANSFORM_ATTRS + keyable:
-        if attr_name in attrs:
-            continue
-        if attr_exists(node_a + '.' + attr_name) and attr_exists(node_b + '.' + attr_name):
-            attrs.append(attr_name)
-
-    return attrs
-
-
-def mirror_pair(node_a, node_b, start_frame, end_frame):
-    for attr_name in get_target_attrs(node_a, node_b):
-        attr_a = node_a + '.' + attr_name
-        attr_b = node_b + '.' + attr_name
-        times = sorted(list(set(get_key_times(attr_a, start_frame, end_frame) + get_key_times(attr_b, start_frame, end_frame))))
-
-        if not times:
-            continue
-
-        saved = []
-        for frame in times:
-            saved.append((frame, get_value(attr_a, frame), get_value(attr_b, frame)))
-
-        for frame, value_a, value_b in saved:
-            set_value(attr_a, frame, mirror_value(attr_name, value_b))
-            set_value(attr_b, frame, mirror_value(attr_name, value_a))
-
-
-def mirror_center(node, start_frame, end_frame):
-    for attr_name in MIRROR_SIGN_ATTRS:
-        attr = node + '.' + attr_name
-        if not attr_exists(attr):
-            continue
-        for frame in get_key_times(attr, start_frame, end_frame):
-            value = get_value(attr, frame)
-            if value is not None:
-                set_value(attr, frame, value * -1.0)
-
-
-def mirror_selected_animation(include_hierarchy=True):
-    nodes = get_selected_nodes(include_hierarchy)
-    if not nodes:
-        cmds.warning('Please select controller root or controllers.')
+    if "_L" in obj_name:
+        left_obj = obj
+        right_obj = mirror_obj
+    elif "_R" in obj_name:
+        left_obj = mirror_obj
+        right_obj = obj
+    else:
         return
 
-    start_frame = cmds.playbackOptions(query=True, min=True)
-    end_frame = cmds.playbackOptions(query=True, max=True)
-    lookup = make_lookup(nodes)
-    done = set()
-    pair_count = 0
-    center_count = 0
+    left_data = copy_animation_data(
+        left_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    right_data = copy_animation_data(
+        right_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    temp_locator = create_temp_locator_from_anim(
+        left_obj,
+        left_data
+    )
+
+    locator_data = copy_animation_data(
+        temp_locator,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    delete_keys(
+        left_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    delete_keys(
+        right_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    paste_animation_data(
+        left_obj,
+        right_data,
+        invert_attrs
+    )
+
+    paste_animation_data(
+        right_obj,
+        locator_data,
+        invert_attrs
+    )
+
+    set_rotation_curves_quaternion(left_obj)
+    set_rotation_curves_quaternion(right_obj)
+
+    if cmds.objExists(temp_locator):
+        cmds.delete(temp_locator)
+
+
+def anim_mirror_main():
+    rigs = get_selected_rigs()
+
+    if not rigs:
+        return
+
+    start, end = get_playback_range()
+    current_time = cmds.currentTime(q=True)
+
+    grpA_rig_list = []
+    grpB_rig_list = []
+    grpC_rig_list = []
+    grpD_rig_list = []
+
+    for rig in rigs:
+        if contains_keyword(rig, GRP_A_KEYWORDS):
+            grpA_rig_list.append(rig)
+
+        if contains_keyword(rig, GRP_B_KEYWORDS):
+            grpB_rig_list.append(rig)
+
+        if contains_keyword(rig, GRP_C_KEYWORDS):
+            grpC_rig_list.append(rig)
+
+        if contains_keyword(rig, GRP_D_KEYWORDS):
+            grpD_rig_list.append(rig)
+
+    print("GrpA_Rig_List : {}".format(grpA_rig_list))
+    print("GrpB_Rig_List : {}".format(grpB_rig_list))
+    print("GrpC_Rig_List : {}".format(grpC_rig_list))
+    print("GrpD_Rig_List : {}".format(grpD_rig_list))
+
+    processed_pairs = set()
 
     cmds.undoInfo(openChunk=True)
+
     try:
-        for node in nodes:
-            if node in done:
-                continue
-            mirror_node = find_mirror_node(node, lookup)
-            if mirror_node and mirror_node != node:
-                mirror_pair(node, mirror_node, start_frame, end_frame)
-                done.add(node)
-                done.add(mirror_node)
-                pair_count += 1
-            else:
-                mirror_center(node, start_frame, end_frame)
-                done.add(node)
-                center_count += 1
-        print('Mirror Animation Done. pairs={0}, center={1}'.format(pair_count, center_count))
-    except Exception:
-        cmds.warning('Mirror animation error. See Script Editor.')
-        import traceback
-        traceback.print_exc()
+        cmds.refresh(suspend=True)
+
+        for obj in grpA_rig_list:
+            mirror_single_rig(
+                obj,
+                start,
+                end,
+                GRP_A_INVERT_ATTRS
+            )
+
+        pair_groups = [
+            (grpB_rig_list, GRP_B_INVERT_ATTRS),
+            (grpC_rig_list, GRP_C_INVERT_ATTRS),
+            (grpD_rig_list, GRP_D_INVERT_ATTRS),
+        ]
+
+        for rig_list, invert_attrs in pair_groups:
+            for obj in rig_list:
+                mirror_obj = get_mirror_object(obj)
+
+                if not mirror_obj:
+                    cmds.warning(
+                        u"{} の対になるオブジェクトが見つかりません".format(obj)
+                    )
+                    continue
+
+                pair_key = tuple(
+                    sorted([
+                        get_short_name(obj),
+                        get_short_name(mirror_obj)
+                    ])
+                )
+
+                if pair_key in processed_pairs:
+                    continue
+
+                processed_pairs.add(pair_key)
+
+                mirror_pair_rig(
+                    obj,
+                    start,
+                    end,
+                    invert_attrs
+                )
+
+        cmds.currentTime(current_time, edit=True)
+
+        cmds.confirmDialog(
+            title=u"完了",
+            message=u"アニメーションを反転しました。",
+            button=["OK"]
+        )
+
+    except Exception as e:
+        cmds.warning(u"反転処理中にエラーが発生しました: {}".format(e))
+        cmds.currentTime(current_time, edit=True)
+
     finally:
+        cmds.refresh(suspend=False)
         cmds.undoInfo(closeChunk=True)
 
 
-def show_mirror_animation_tool():
-    if cmds.window(WINDOW_NAME, exists=True):
-        cmds.deleteUI(WINDOW_NAME)
-    cmds.window(WINDOW_NAME, title='Maya Anim Mirror Tool', sizeable=False)
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=10, columnOffset=('both', 20))
-    cmds.text(label='Select controller root or controllers.\nMirror keys in current time range.', align='left')
-    cb = cmds.checkBox(label='Include hierarchy', value=True)
-    cmds.button(
-        label='Mirror Animation',
-        height=40,
-        command=lambda *_: mirror_selected_animation(cmds.checkBox(cb, query=True, value=True))
-    )
-    cmds.showWindow(WINDOW_NAME)
-
-
-show_mirror_animation_tool()
+anim_mirror_main()
