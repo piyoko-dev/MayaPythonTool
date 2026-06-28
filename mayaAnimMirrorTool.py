@@ -1,208 +1,220 @@
 # -*- coding: utf-8 -*-
 import maya.cmds as cmds
-import  maya.mel as mel
 
-
-#ターゲットになるコントローラー名
-Target_List = [
-    "Chr:CN_Bip001_ik_Hand_L"
-    "Chr:CN_Bip001_ik_Hand_R"
+MIRROR_SIGN_ATTRS = set(['translateX', 'rotateY', 'rotateZ'])
+NAME_PAIRS = [('_L', '_R'), ('_R', '_L'), ('L_', 'R_'), ('R_', 'L_')]
+TRANSFORM_ATTRS = [
+    'translateX', 'translateY', 'translateZ',
+    'rotateX', 'rotateY', 'rotateZ',
+    'scaleX', 'scaleY', 'scaleZ'
 ]
-
-targetList = [n for n in targetList if cmds.objExists(n)]
-
-if not targetList:
-    cmds.error('Target nodes were not found.')
+WINDOW_NAME = 'mayaAnimMirrorToolWin'
 
 
-#処理させたいノードのルートをあらかじめ選択して実行する前提で、選択からジョイントのルートを取得
-rootNode = cmds.ls(sl=True)[0]
-#mel.eval('GoToBindPose;')
+def to_list(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
 
 
-#jointList = cmds.ls(rootNode,dag = True,type = 'joint')
-targetList = cmds.ls(rootNode,dag = True,type = 'transform')
-print("targetList:", targetList)
-
-inputLocList = [] 
-culNodeList = []
-
-outputLocDict = {}
-outputOffsetList = []
+def short_name(node):
+    return node.split('|')[-1]
 
 
-#各ジョイントごとの処理
-for j in targetList:
-    #あらかじめ反転対象のジョイントを探しておく
-    mirrorJoint = j 
-    if '_L' in j:
-        mirrorJoint = j.replace('_L','_R') 
-    elif '_R' in j:
-        mirrorJoint = j.replace('_R','_L') 
-    if not mirrorJoint in targetList:
-        #ミラー対象が見当たらなければ処理をスキップ
-        continue
-    #各ジョイントごとにTransformノードを作り、コンストレインで接続
-    loc = cmds.createNode('transform')
-    inputLocList.append(loc)
-    #移動・回転に0.0をセットすることで初期位置に戻れるようにoffsetノードを用意
-    cmds.pointConstraint(j,loc) 
-    cmds.orientConstraint(j,loc,mo = True)
-
-#反転ベクトルを生成するためのノード群を作成
-rotateMatrix = cmds.createNode('composeMatrix') 
-aimVectorNode = cmds.createNode('composeMatrix') 
-upVectorNode = cmds.createNode('composeMatrix')
-
-aimVectorMatrix = cmds.createNode('multMatrix') 
-upVectorMatrix = cmds.createNode('multMatrix')
-
-aimVectorDecomposeMatrix = cmds.createNode('decomposeMatrix')
-upVectorDecomposeMatrix = cmds.createNode('decomposeMatrix')
-
-mirrorAimVector = cmds.createNode('floatMath') 
-mirrorUpVector = cmds.createNode('floatMath')
-
-getBendAxisAngle = cmds.createNode('angleBetween') 
-getRollAxisAngle = cmds.createNode('angleBetween')
-
-getBendQuat = cmds.createNode('axisAngleToQuat') 
-getRollQuat = cmds.createNode('axisAngleToQuat')
-
-getBendMatrix = cmds.createNode('composeMatrix') 
-getBendedOrgUpVector = cmds.createNode('multMatrix')
-bendedUpVectorDecomposeMatrix = cmds.createNode('decomposeMatrix')
-
-quatCul = cmds.createNode('quatProd') 
-quatToE = cmds.createNode('quatToEuler')
-
-mirrorPosNode = cmds.createNode('floatMath')
-
-culNodeList.extend([
-    rotateMatrix,aimVectorNode,upVectorNode,
-    aimVectorMatrix,upVectorMatrix, 
-    aimVectorDecomposeMatrix,upVectorDecomposeMatrix,
-    mirrorAimVector,mirrorUpVector,
-    getBendAxisAngle,getRollAxisAngle, 
-    getBendQuat,getRollQuat,
-    getBendMatrix,getBendedOrgUpVector,bendedUpVectorDecomposeMatrix,quatCul,quatToE,mirrorPosNode
-    ])
+def no_namespace(name):
+    return name.split(':')[-1]
 
 
-#反転マトリクスのノード構築
-cmds.connectAttr('{}.rotate'.format(loc),'{}.inputRotate'.format(rotateMatrix))
+def mirror_name(name):
+    for a, b in NAME_PAIRS:
+        if a in name:
+            return name.replace(a, b, 1)
+    return None
 
 
-#aimVector/upVectorの定義
-cmds.setAttr('{}.inputTranslate'.format(aimVectorNode),1.0,0.0,0.0)
-cmds.setAttr('{}.inputTranslate'.format(upVectorNode),0.0,1.0,0.0)
-cmds.connectAttr('{}.outputMatrix'.format(aimVectorNode),'{}.matrixIn[0]'.format(aimVectorMatrix))
-cmds.connectAttr('{}.outputMatrix'.format(upVectorNode),'{}.matrixIn[0]'.format(upVectorMatrix))
-cmds.connectAttr('{}.outputMatrix'.format(rotateMatrix),'{}.matrixIn[1]'.format(aimVectorMatrix))
-cmds.connectAttr('{}.outputMatrix'.format(rotateMatrix),'{}.matrixIn[1]'.format(upVectorMatrix))
-cmds.connectAttr('{}.matrixSum'.format(aimVectorMatrix),'{}.inputMatrix'.format(aimVectorDecomposeMatrix))
-cmds.connectAttr('{}.matrixSum'.format(upVectorMatrix),'{}.inputMatrix'.format(upVectorDecomposeMatrix))
-cmds.connectAttr('{}.outputTranslateX'.format(aimVectorDecomposeMatrix),'{}.floatA'.format(mirrorAimVector))
-cmds.connectAttr('{}.outputTranslateX'.format(upVectorDecomposeMatrix),'{}.floatA'.format(mirrorUpVector))
+def get_selected_nodes(include_hierarchy=True):
+    selected = cmds.ls(selection=True, long=True, type='transform') or []
+    result = []
 
-#ベクトル反転floatMathノードの値を操作
-cmds.setAttr('{}.floatB'.format(mirrorAimVector),-1.0)
-cmds.setAttr('{}.floatB'.format(mirrorUpVector),-1.0) 
-cmds.setAttr('{}.operation'.format(mirrorAimVector),2) 
-cmds.setAttr('{}.operation'.format(mirrorUpVector),2)
+    for node in selected:
+        if node not in result:
+            result.append(node)
 
+        if include_hierarchy:
+            children = cmds.listRelatives(
+                node,
+                allDescendents=True,
+                fullPath=True,
+                type='transform'
+            ) or []
+            for child in children:
+                if child not in result:
+                    result.append(child)
 
-#bend成分のベクトル接続
-cmds.connectAttr('{}.outFloat'.format(mirrorAimVector),'{}.vector2X'.format(getBendAxisAngle))
-cmds.connectAttr('{}.outputTranslateY'.format(aimVectorDecomposeMatrix),'{}.vector2Y'.format(getBendAxisAngle))
-cmds.connectAttr('{}.outputTranslateZ'.format(aimVectorDecomposeMatrix),'{}.vector2Z'.format(getBendAxisAngle))
-
-#aimVectorの規定値を現在のvector2の値から一時的にコネクションして切断し、値を設定する。
-cmds.connectAttr('{}.vector2'.format(getBendAxisAngle),'{}.vector1'.format(getBendAxisAngle))
-cmds.disconnectAttr('{}.vector2'.format(getBendAxisAngle),'{}.vector1'.format(getBendAxisAngle))
-
-#Roll成分のベクトル接続 ※vector1はまだ。
-cmds.connectAttr('{}.outFloat'.format(mirrorUpVector),'{}.vector2X'.format(getRollAxisAngle))
-cmds.connectAttr('{}.outputTranslateY'.format(upVectorDecomposeMatrix),'{}.vector2Y'.format(getRollAxisAngle))
-cmds.connectAttr('{}.outputTranslateZ'.format(upVectorDecomposeMatrix),'{}.vector2Z'.format(getRollAxisAngle))
-
-#Quaternion取得
-cmds.connectAttr('{}.axis'.format(getBendAxisAngle),'{}.inputAxis'.format(getBendQuat))
-cmds.connectAttr('{}.angle'.format(getBendAxisAngle),'{}.inputAngle'.format(getBendQuat))
-cmds.connectAttr('{}.axis'.format(getRollAxisAngle),'{}.inputAxis'.format(getRollQuat))
-cmds.connectAttr('{}.angle'.format(getRollAxisAngle),'{}.inputAngle'.format(getRollQuat))
-
-#Roll成分の回転基準のベクトルを計算
-cmds.connectAttr('{}.outputQuat'.format(getBendQuat),'{}.inputQuat'.format(getBendMatrix))
-cmds.setAttr('{}.useEulerRotation'.format(getBendMatrix),False)
-
-cmds.connectAttr('{}.outputMatrix'.format(upVectorNode),'{}.matrixIn[0]'.format(getBendedOrgUpVector))
-cmds.connectAttr('{}.outputMatrix'.format(getBendMatrix),'{}.matrixIn[1]'.format(getBendedOrgUpVector))
-cmds.connectAttr('{}.matrixSum'.format(getBendedOrgUpVector),'{}.inputMatrix'.format(bendedUpVectorDecomposeMatrix))
-
-#upVectorの回転計算の基準ベクトルVector1にコネクション
-cmds.connectAttr('{}.outputTranslate'.format(bendedUpVectorDecomposeMatrix),'{}.vector1'.format(getRollAxisAngle))
-
-#出力用のノードのコネクション
-#出力用ノードはオフセット用ノードとあらかじめ二重構造にしておく
-outputNode_offset = cmds.createNode('transform')
-outputOffsetList.append(outputNode_offset)
-outputNode = cmds.createNode('transform') 
-cmds.parent(outputNode,outputNode_offset)
-outputLocDict[j] = outputNode
-
-cmds.connectAttr('{}.outputQuat'.format(getBendQuat),'{}.input1Quat'.format(quatCul))
-cmds.connectAttr('{}.outputQuat'.format(getRollQuat),'{}.input2Quat'.format(quatCul))
-cmds.connectAttr('{}.outputQuat'.format(quatCul),'{}.inputQuat'.format(quatToE))
+    return result
 
 
-#接続はoffsetノードの方に。
-#回転出力の接続
-cmds.connectAttr('{}.outputRotate'.format(quatToE),'{}.r'.format(outputNode_offset))
-
-#移動成分の反転接続
-cmds.connectAttr('{}.tx'.format(loc),'{}.floatA'.format(mirrorPosNode)) 
-cmds.setAttr('{}.floatB'.format(mirrorPosNode),-1.0) 
-cmds.setAttr('{}.operation'.format(mirrorPosNode),2)
-
-cmds.connectAttr('{}.outFloat'.format(mirrorPosNode),'{}.tx'.format(outputNode_offset))
-cmds.connectAttr('{}.ty'.format(loc),'{}.ty'.format(outputNode_offset)) 
-cmds.connectAttr('{}.tz'.format(loc),'{}.tz'.format(outputNode_offset))
-
-#出力用ノードは、あらかじめ検索しておいた反転対象ノードと位置・向きを合わせておく
-cmds.delete(cmds.pointConstraint(mirrorJoint,outputNode)) 
-cmds.delete(cmds.orientConstraint(mirrorJoint,outputNode))
-
-st = cmds.playbackOptions(q = True,min = True)
-et = cmds.playbackOptions(q = True,max = True)
-
-cmds.bakeResults(outputOffsetList,sm = True,t = (st,et),at = 
-('tx','ty','tz','rx','ry','rz'))
+def make_lookup(nodes):
+    lookup = {}
+    for node in nodes:
+        s = short_name(node)
+        lookup[s] = node
+        ns = no_namespace(s)
+        if ns not in lookup:
+            lookup[ns] = node
+    return lookup
 
 
-#ベイクが終わったら反転計算用に作ったノード群は不要になるので、すべて削除しておく
-for node in inputLocList:
-    if cmds.objExists(node):cmds.delete(node) 
-for node in culNodeList:
-    if cmds.objExists(node):cmds.delete(node)
+def find_mirror_node(node, lookup):
+    s = short_name(node)
+    m = mirror_name(s)
+    if m and m in lookup:
+        return lookup[m]
+
+    ns = no_namespace(s)
+    m = mirror_name(ns)
+    if m and m in lookup:
+        return lookup[m]
+
+    return None
 
 
-for j in targetList:
-    scsJoint = j
-    if '_L' in j:
-        scsJoint = j.replace('_L','_R') 
-    elif '_R' in j:
-        scsJoint = j.replace('_R','_L')
-    if scsJoint not in outputLocDict.keys():
-        continue
+def attr_exists(attr):
+    return cmds.objExists(attr)
 
-    cmds.pointConstraint(outputLocDict[scsJoint],j) 
-    cmds.orientConstraint(outputLocDict[scsJoint],j)
 
-#反転アニメーションをベイク
-cmds.bakeResults(targetList,sm = True,
-    t = (st,et),at = ('tx','ty','tz','rx','ry','rz')) 
+def is_settable(attr):
+    try:
+        return (not cmds.getAttr(attr, lock=True)) and bool(cmds.getAttr(attr, settable=True))
+    except Exception:
+        return False
 
-#不要になったoutputノード群は削除
-cmds.delete(outputOffsetList)
 
+def get_key_times(attr, start_frame, end_frame):
+    return to_list(cmds.keyframe(attr, query=True, time=(start_frame, end_frame), timeChange=True))
+
+
+def get_value(attr, frame):
+    data = to_list(cmds.keyframe(attr, query=True, time=(frame, frame), valueChange=True))
+    if data:
+        return data[0]
+    try:
+        return cmds.getAttr(attr, time=frame)
+    except Exception:
+        return None
+
+
+def set_value(attr, frame, value):
+    if value is None or not is_settable(attr):
+        return
+    try:
+        cmds.setKeyframe(attr, time=frame, value=value)
+    except Exception:
+        pass
+
+
+def mirror_value(attr_name, value):
+    if value is None:
+        return None
+    if attr_name in MIRROR_SIGN_ATTRS:
+        return value * -1.0
+    return value
+
+
+def get_target_attrs(node_a, node_b):
+    attrs = []
+    keyable = cmds.listAttr(node_a, keyable=True) or []
+
+    for attr_name in TRANSFORM_ATTRS + keyable:
+        if attr_name in attrs:
+            continue
+        if attr_exists(node_a + '.' + attr_name) and attr_exists(node_b + '.' + attr_name):
+            attrs.append(attr_name)
+
+    return attrs
+
+
+def mirror_pair(node_a, node_b, start_frame, end_frame):
+    for attr_name in get_target_attrs(node_a, node_b):
+        attr_a = node_a + '.' + attr_name
+        attr_b = node_b + '.' + attr_name
+        times = sorted(list(set(get_key_times(attr_a, start_frame, end_frame) + get_key_times(attr_b, start_frame, end_frame))))
+
+        if not times:
+            continue
+
+        saved = []
+        for frame in times:
+            saved.append((frame, get_value(attr_a, frame), get_value(attr_b, frame)))
+
+        for frame, value_a, value_b in saved:
+            set_value(attr_a, frame, mirror_value(attr_name, value_b))
+            set_value(attr_b, frame, mirror_value(attr_name, value_a))
+
+
+def mirror_center(node, start_frame, end_frame):
+    for attr_name in MIRROR_SIGN_ATTRS:
+        attr = node + '.' + attr_name
+        if not attr_exists(attr):
+            continue
+        for frame in get_key_times(attr, start_frame, end_frame):
+            value = get_value(attr, frame)
+            if value is not None:
+                set_value(attr, frame, value * -1.0)
+
+
+def mirror_selected_animation(include_hierarchy=True):
+    nodes = get_selected_nodes(include_hierarchy)
+    if not nodes:
+        cmds.warning('Please select controller root or controllers.')
+        return
+
+    start_frame = cmds.playbackOptions(query=True, min=True)
+    end_frame = cmds.playbackOptions(query=True, max=True)
+    lookup = make_lookup(nodes)
+    done = set()
+    pair_count = 0
+    center_count = 0
+
+    cmds.undoInfo(openChunk=True)
+    try:
+        for node in nodes:
+            if node in done:
+                continue
+            mirror_node = find_mirror_node(node, lookup)
+            if mirror_node and mirror_node != node:
+                mirror_pair(node, mirror_node, start_frame, end_frame)
+                done.add(node)
+                done.add(mirror_node)
+                pair_count += 1
+            else:
+                mirror_center(node, start_frame, end_frame)
+                done.add(node)
+                center_count += 1
+        print('Mirror Animation Done. pairs={0}, center={1}'.format(pair_count, center_count))
+    except Exception:
+        cmds.warning('Mirror animation error. See Script Editor.')
+        import traceback
+        traceback.print_exc()
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+
+def show_mirror_animation_tool():
+    if cmds.window(WINDOW_NAME, exists=True):
+        cmds.deleteUI(WINDOW_NAME)
+    cmds.window(WINDOW_NAME, title='Maya Anim Mirror Tool', sizeable=False)
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=10, columnOffset=('both', 20))
+    cmds.text(label='Select controller root or controllers.\nMirror keys in current time range.', align='left')
+    cb = cmds.checkBox(label='Include hierarchy', value=True)
+    cmds.button(
+        label='Mirror Animation',
+        height=40,
+        command=lambda *_: mirror_selected_animation(cmds.checkBox(cb, query=True, value=True))
+    )
+    cmds.showWindow(WINDOW_NAME)
+
+
+show_mirror_animation_tool()
