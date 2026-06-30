@@ -135,9 +135,16 @@ def get_mirror_object(obj):
     elif "_R" in original_name:
         mirror_name = original_name.replace("_R", "_L", 1)
     else:
+        print("No _L/_R token : {}".format(original_name))
         return None
 
-    return find_node_by_short_name(namespace + mirror_name)
+    mirror_short_name = namespace + mirror_name
+    mirror_obj = find_node_by_short_name(mirror_short_name)
+
+    print("Find Mirror : {} -> {}".format(obj, mirror_short_name))
+    print("Result      : {}".format(mirror_obj))
+
+    return mirror_obj
 
 
 def copy_animation_data(obj, attrs, start, end):
@@ -163,6 +170,7 @@ def delete_keys(obj, attrs, start, end):
     for attr in attrs:
         if not is_attr_available(obj, attr):
             continue
+
         try:
             cmds.cutKey(obj, attribute=attr, time=(start, end), option="keys")
         except:
@@ -172,6 +180,7 @@ def delete_keys(obj, attrs, start, end):
 def paste_animation_data(obj, anim_data, invert_attrs):
     for attr, keys in anim_data.items():
         if not is_attr_available(obj, attr):
+            print("Skip locked or missing attr : {}.{}".format(obj, attr))
             continue
 
         for frame, value in keys:
@@ -217,9 +226,13 @@ def create_temp_locator_from_anim(obj, anim_data):
 
 
 def mirror_single_rig(obj, start, end, invert_attrs):
+    print("Single Mirror : {}".format(obj))
+
     anim_data = copy_animation_data(obj, ALL_ATTRS, start, end)
+
     delete_keys(obj, ALL_ATTRS, start, end)
     paste_animation_data(obj, anim_data, invert_attrs)
+
     set_rotation_curves_quaternion(obj)
 
 
@@ -228,7 +241,7 @@ def mirror_pair_rig(obj, start, end, invert_attrs):
 
     if not mirror_obj:
         cmds.warning(u"{} の対になるオブジェクトが見つかりません".format(obj))
-        return
+        return False
 
     obj_name = remove_namespace(obj)
 
@@ -239,7 +252,12 @@ def mirror_pair_rig(obj, start, end, invert_attrs):
         left_obj = mirror_obj
         right_obj = obj
     else:
-        return
+        return False
+
+    print("Pair Mirror Start")
+    print("Left  : {}".format(left_obj))
+    print("Right : {}".format(right_obj))
+    print("Invert Attrs : {}".format(invert_attrs))
 
     left_data = copy_animation_data(left_obj, ALL_ATTRS, start, end)
     right_data = copy_animation_data(right_obj, ALL_ATTRS, start, end)
@@ -258,6 +276,9 @@ def mirror_pair_rig(obj, start, end, invert_attrs):
 
     if cmds.objExists(temp_locator):
         cmds.delete(temp_locator)
+
+    print("Pair Mirror End")
+    return True
 
 
 def get_ui_rules():
@@ -388,6 +409,7 @@ def execute_anim_mirror_from_ui(*args):
     start, end = get_playback_range()
     current_time = cmds.currentTime(q=True)
     processed_pairs = set()
+    processed_count = 0
 
     cmds.undoInfo(openChunk=True)
 
@@ -395,35 +417,66 @@ def execute_anim_mirror_from_ui(*args):
         cmds.refresh(suspend=True)
 
         for rule in rules:
+            keywords = rule["keywords"]
+            invert_attrs = rule["invert_attrs"]
+            mode = rule["mode"]
+
+            print("----- Rule Check -----")
+            print("Keywords     : {}".format(keywords))
+            print("Invert Attrs : {}".format(invert_attrs))
+            print("Mode         : {}".format(mode))
+
             for obj in rigs:
-                if not contains_keyword(obj, rule["keywords"]):
+                if not contains_keyword(obj, keywords):
                     continue
 
-                if rule["mode"] == u"通常反転":
-                    mirror_single_rig(obj, start, end, rule["invert_attrs"])
+                print("Matched Rig  : {}".format(obj))
 
-                elif rule["mode"] == u"左右反転":
+                if mode == u"通常反転":
+                    mirror_single_rig(obj, start, end, invert_attrs)
+                    processed_count += 1
+
+                elif mode == u"左右反転":
                     mirror_obj = get_mirror_object(obj)
 
                     if not mirror_obj:
-                        cmds.warning(u"{} の対になるオブジェクトが見つかりません".format(obj))
+                        cmds.warning(
+                            u"{} の対になるオブジェクトが見つかりません".format(obj)
+                        )
                         continue
 
-                    pair_key = tuple(sorted([get_short_name(obj), get_short_name(mirror_obj)]))
+                    print("Mirror Pair  : {} <-> {}".format(obj, mirror_obj))
+
+                    pair_key = tuple(
+                        sorted([
+                            get_short_name(obj),
+                            get_short_name(mirror_obj)
+                        ])
+                    )
 
                     if pair_key in processed_pairs:
+                        print("Skip already processed pair : {}".format(pair_key))
                         continue
 
                     processed_pairs.add(pair_key)
-                    mirror_pair_rig(obj, start, end, rule["invert_attrs"])
+
+                    result = mirror_pair_rig(obj, start, end, invert_attrs)
+
+                    if result:
+                        processed_count += 1
 
         cmds.currentTime(current_time, edit=True)
 
-        cmds.confirmDialog(
-            title=u"完了",
-            message=u"アニメーションを反転しました。",
-            button=["OK"]
-        )
+        if processed_count == 0:
+            cmds.warning(
+                u"反転対象のリグが見つかりませんでした。Keyword や _L / _R の名前を確認してください。"
+            )
+        else:
+            cmds.confirmDialog(
+                title=u"完了",
+                message=u"アニメーションを反転しました。処理数: {}".format(processed_count),
+                button=["OK"]
+            )
 
     except Exception as e:
         cmds.warning(u"反転処理中にエラーが発生しました: {}".format(e))
