@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from __future__ import unicode_literals
+
 import maya.cmds as cmds
 import json
 
@@ -13,11 +15,21 @@ RULE_ROWS = []
 RULE_COLUMN = "ruleRowsColumn"
 
 DEFAULT_RULES = [
-    {"keywords": "COG, Chest, Pelvis", "attrs": "translateX, rotateY, rotateZ", "mode": u"通常反転"},
-    {"keywords": "Hand, Foot", "attrs": "translateX, translateY, translateZ, rotateY, rotateZ", "mode": u"左右反転"},
-    {"keywords": "Finger, Shoulder, Toe", "attrs": "rotateY, rotateZ", "mode": u"左右反転"},
-    {"keywords": "upVector, LegVector", "attrs": "translateX", "mode": u"左右反転"},
+    {"keywords": "COG, Chest, Pelvis", "attrs": "translateX, rotateY, rotateZ", "mode": "通常反転"},
+    {"keywords": "Hand, Foot", "attrs": "translateX, translateY, translateZ, rotateY, rotateZ", "mode": "左右反転"},
+    {"keywords": "Finger, Shoulder, Toe", "attrs": "rotateY, rotateZ", "mode": "左右反転"},
+    {"keywords": "upVector, LegVector", "attrs": "translateX", "mode": "左右反転"},
 ]
+
+
+def safe_text(text):
+    try:
+        return unicode(text)
+    except:
+        try:
+            return str(text)
+        except:
+            return ""
 
 
 def get_short_name(node):
@@ -39,7 +51,9 @@ def get_namespace(node):
 
 
 def split_text(text):
-    return [word.strip() for word in text.split(",") if word.strip()] if text else []
+    if not text:
+        return []
+    return [word.strip() for word in text.split(",") if word.strip()]
 
 
 def get_transform(node):
@@ -54,10 +68,17 @@ def get_transform(node):
 
 
 def is_target_rig(node):
-    shapes = cmds.listRelatives(node, shapes=True, noIntermediate=True, fullPath=True) or []
+    shapes = cmds.listRelatives(
+        node,
+        shapes=True,
+        noIntermediate=True,
+        fullPath=True
+    ) or []
+
     for shape in shapes:
         if cmds.nodeType(shape) in ["nurbsCurve", "mesh", "nurbsSurface"]:
             return True
+
     return False
 
 
@@ -65,7 +86,7 @@ def get_selected_rigs():
     selected = cmds.ls(sl=True, long=True) or []
 
     if not selected:
-        cmds.warning(u"オブジェクトを選択してください")
+        cmds.warning("Please select objects.")
         return []
 
     rigs = []
@@ -73,6 +94,7 @@ def get_selected_rigs():
 
     for node in selected:
         transform = get_transform(node)
+
         if not transform:
             continue
 
@@ -86,7 +108,7 @@ def get_selected_rigs():
         rigs.append(transform)
 
     if not rigs:
-        cmds.warning(u"NURBS Curve / Mesh / NURBS Surface のリグを選択してください")
+        cmds.warning("Please select NURBS Curve / Mesh / NURBS Surface rigs.")
 
     return rigs
 
@@ -116,6 +138,7 @@ def get_playback_range():
 
 def find_node_by_short_name(short_name):
     result = cmds.ls(short_name, type="transform", long=True) or []
+
     if result:
         return result[0]
 
@@ -158,8 +181,10 @@ def copy_animation_data(obj, attrs, start, end):
 
         for frame in range(start, end + 1):
             cmds.currentTime(frame, edit=True)
+
             try:
-                anim_data[attr].append((frame, cmds.getAttr(obj + "." + attr)))
+                value = cmds.getAttr(obj + "." + attr)
+                anim_data[attr].append((frame, value))
             except:
                 pass
 
@@ -172,7 +197,12 @@ def delete_keys(obj, attrs, start, end):
             continue
 
         try:
-            cmds.cutKey(obj, attribute=attr, time=(start, end), option="keys")
+            cmds.cutKey(
+                obj,
+                attribute=attr,
+                time=(start, end),
+                option="keys"
+            )
         except:
             pass
 
@@ -185,15 +215,24 @@ def paste_animation_data(obj, anim_data, invert_attrs):
 
         for frame, value in keys:
             cmds.currentTime(frame, edit=True)
+
             paste_value = value * -1.0 if attr in invert_attrs else value
 
             try:
                 cmds.setAttr(obj + "." + attr, paste_value)
 
                 if attr in ["rotateX", "rotateY", "rotateZ"]:
-                    cmds.setKeyframe(obj, attribute=attr, minimizeRotation=True)
+                    cmds.setKeyframe(
+                        obj,
+                        attribute=attr,
+                        minimizeRotation=True
+                    )
                 else:
-                    cmds.setKeyframe(obj, attribute=attr)
+                    cmds.setKeyframe(
+                        obj,
+                        attribute=attr
+                    )
+
             except:
                 pass
 
@@ -211,16 +250,26 @@ def set_rotation_curves_quaternion(obj):
 
         for curve in anim_curves:
             try:
-                cmds.rotationInterpolation(curve, conversion="quaternionSlerp")
+                cmds.rotationInterpolation(
+                    curve,
+                    conversion="quaternionSlerp"
+                )
             except:
                 pass
 
 
 def create_temp_locator_from_anim(obj, anim_data):
-    locator = cmds.spaceLocator(name=remove_namespace(obj) + "_Locator")[0]
+    locator = cmds.spaceLocator(
+        name=remove_namespace(obj) + "_Locator"
+    )[0]
+
     print("Create temp locator : {}".format(locator))
 
-    paste_animation_data(locator, anim_data, invert_attrs=[])
+    paste_animation_data(
+        locator,
+        anim_data,
+        invert_attrs=[]
+    )
 
     return locator
 
@@ -228,10 +277,25 @@ def create_temp_locator_from_anim(obj, anim_data):
 def mirror_single_rig(obj, start, end, invert_attrs):
     print("Single Mirror : {}".format(obj))
 
-    anim_data = copy_animation_data(obj, ALL_ATTRS, start, end)
+    anim_data = copy_animation_data(
+        obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
 
-    delete_keys(obj, ALL_ATTRS, start, end)
-    paste_animation_data(obj, anim_data, invert_attrs)
+    delete_keys(
+        obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    paste_animation_data(
+        obj,
+        anim_data,
+        invert_attrs
+    )
 
     set_rotation_curves_quaternion(obj)
 
@@ -240,7 +304,7 @@ def mirror_pair_rig(obj, start, end, invert_attrs):
     mirror_obj = get_mirror_object(obj)
 
     if not mirror_obj:
-        cmds.warning(u"{} の対になるオブジェクトが見つかりません".format(obj))
+        cmds.warning("Mirror object was not found.")
         return False
 
     obj_name = remove_namespace(obj)
@@ -259,17 +323,57 @@ def mirror_pair_rig(obj, start, end, invert_attrs):
     print("Right : {}".format(right_obj))
     print("Invert Attrs : {}".format(invert_attrs))
 
-    left_data = copy_animation_data(left_obj, ALL_ATTRS, start, end)
-    right_data = copy_animation_data(right_obj, ALL_ATTRS, start, end)
+    left_data = copy_animation_data(
+        left_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
 
-    temp_locator = create_temp_locator_from_anim(left_obj, left_data)
-    locator_data = copy_animation_data(temp_locator, ALL_ATTRS, start, end)
+    right_data = copy_animation_data(
+        right_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
 
-    delete_keys(left_obj, ALL_ATTRS, start, end)
-    delete_keys(right_obj, ALL_ATTRS, start, end)
+    temp_locator = create_temp_locator_from_anim(
+        left_obj,
+        left_data
+    )
 
-    paste_animation_data(left_obj, right_data, invert_attrs)
-    paste_animation_data(right_obj, locator_data, invert_attrs)
+    locator_data = copy_animation_data(
+        temp_locator,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    delete_keys(
+        left_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    delete_keys(
+        right_obj,
+        ALL_ATTRS,
+        start,
+        end
+    )
+
+    paste_animation_data(
+        left_obj,
+        right_data,
+        invert_attrs
+    )
+
+    paste_animation_data(
+        right_obj,
+        locator_data,
+        invert_attrs
+    )
 
     set_rotation_curves_quaternion(left_obj)
     set_rotation_curves_quaternion(right_obj)
@@ -278,6 +382,7 @@ def mirror_pair_rig(obj, start, end, invert_attrs):
         cmds.delete(temp_locator)
 
     print("Pair Mirror End")
+
     return True
 
 
@@ -338,14 +443,14 @@ def load_rules_to_ui(rules):
         add_rule_row(
             keyword_text=rule.get("keywords", ""),
             attr_text=rule.get("attrs", ""),
-            mode_text=rule.get("mode", u"左右反転")
+            mode_text=rule.get("mode", "左右反転")
         )
 
 
 def save_settings(*args):
     file_path = cmds.fileDialog2(
         fileMode=0,
-        caption=u"設定を保存",
+        caption="Save Settings",
         fileFilter="JSON Files (*.json)"
     )
 
@@ -360,16 +465,21 @@ def save_settings(*args):
         with open(file_path[0], "w") as f:
             json.dump(data, f, indent=4)
 
-        cmds.confirmDialog(title=u"保存完了", message=u"設定を保存しました。", button=["OK"])
+        cmds.confirmDialog(
+            title="Saved",
+            message="Settings saved.",
+            button=["OK"]
+        )
 
     except Exception as e:
-        cmds.warning(u"設定の保存に失敗しました: {}".format(e))
+        cmds.warning("Failed to save settings.")
+        print("Save Error : {}".format(safe_text(e)))
 
 
 def import_settings(*args):
     file_path = cmds.fileDialog2(
         fileMode=1,
-        caption=u"設定を読み込み",
+        caption="Import Settings",
         fileFilter="JSON Files (*.json)"
     )
 
@@ -383,15 +493,20 @@ def import_settings(*args):
         rules = data.get("animMirrorSettings", [])
 
         if not rules:
-            cmds.warning(u"読み込める設定がありません")
+            cmds.warning("No settings found in file.")
             return
 
         load_rules_to_ui(rules)
 
-        cmds.confirmDialog(title=u"読み込み完了", message=u"設定を読み込みました。", button=["OK"])
+        cmds.confirmDialog(
+            title="Imported",
+            message="Settings imported.",
+            button=["OK"]
+        )
 
     except Exception as e:
-        cmds.warning(u"設定の読み込みに失敗しました: {}".format(e))
+        cmds.warning("Failed to import settings.")
+        print("Import Error : {}".format(safe_text(e)))
 
 
 def execute_anim_mirror_from_ui(*args):
@@ -403,11 +518,12 @@ def execute_anim_mirror_from_ui(*args):
     rules = get_ui_rules()
 
     if not rules:
-        cmds.warning(u"Keyword と INVERT_ATTRS を入力してください")
+        cmds.warning("Please input Keyword and INVERT_ATTRS.")
         return
 
     start, end = get_playback_range()
     current_time = cmds.currentTime(q=True)
+
     processed_pairs = set()
     processed_count = 0
 
@@ -432,17 +548,20 @@ def execute_anim_mirror_from_ui(*args):
 
                 print("Matched Rig  : {}".format(obj))
 
-                if mode == u"通常反転":
-                    mirror_single_rig(obj, start, end, invert_attrs)
+                if mode == "通常反転":
+                    mirror_single_rig(
+                        obj,
+                        start,
+                        end,
+                        invert_attrs
+                    )
                     processed_count += 1
 
-                elif mode == u"左右反転":
+                elif mode == "左右反転":
                     mirror_obj = get_mirror_object(obj)
 
                     if not mirror_obj:
-                        cmds.warning(
-                            u"{} の対になるオブジェクトが見つかりません".format(obj)
-                        )
+                        cmds.warning("Mirror object was not found.")
                         continue
 
                     print("Mirror Pair  : {} <-> {}".format(obj, mirror_obj))
@@ -460,7 +579,12 @@ def execute_anim_mirror_from_ui(*args):
 
                     processed_pairs.add(pair_key)
 
-                    result = mirror_pair_rig(obj, start, end, invert_attrs)
+                    result = mirror_pair_rig(
+                        obj,
+                        start,
+                        end,
+                        invert_attrs
+                    )
 
                     if result:
                         processed_count += 1
@@ -468,18 +592,17 @@ def execute_anim_mirror_from_ui(*args):
         cmds.currentTime(current_time, edit=True)
 
         if processed_count == 0:
-            cmds.warning(
-                u"反転対象のリグが見つかりませんでした。Keyword や _L / _R の名前を確認してください。"
-            )
+            cmds.warning("No target rigs were processed. Please check Keyword and _L/_R names.")
         else:
             cmds.confirmDialog(
-                title=u"完了",
-                message=u"アニメーションを反転しました。処理数: {}".format(processed_count),
+                title="Complete",
+                message="Animation mirror completed. Count: {}".format(processed_count),
                 button=["OK"]
             )
 
     except Exception as e:
-        cmds.warning(u"反転処理中にエラーが発生しました: {}".format(e))
+        cmds.warning("Mirror failed. Check Script Editor.")
+        print("Mirror Error : {}".format(safe_text(e)))
         cmds.currentTime(current_time, edit=True)
 
     finally:
@@ -497,7 +620,7 @@ def delete_rule_row(row_layout):
         cmds.deleteUI(row_layout)
 
 
-def add_rule_row(keyword_text="", attr_text="", mode_text=u"左右反転", *args):
+def add_rule_row(keyword_text="", attr_text="", mode_text="左右反転", *args):
     row_layout = cmds.rowLayout(
         numberOfColumns=4,
         adjustableColumn=2,
@@ -506,16 +629,23 @@ def add_rule_row(keyword_text="", attr_text="", mode_text=u"左右反転", *args
         parent=RULE_COLUMN
     )
 
-    keyword_field = cmds.textField(text=keyword_text, annotation=u"例：Hand, Foot")
-    attrs_field = cmds.textField(text=attr_text, annotation=u"例：translateX, translateY, rotateZ")
+    keyword_field = cmds.textField(
+        text=keyword_text,
+        annotation="Example: Hand, Foot"
+    )
+
+    attrs_field = cmds.textField(
+        text=attr_text,
+        annotation="Example: translateX, translateY, rotateZ"
+    )
 
     mode_menu = cmds.optionMenu()
-    cmds.menuItem(label=u"通常反転")
-    cmds.menuItem(label=u"左右反転")
+    cmds.menuItem(label="通常反転")
+    cmds.menuItem(label="左右反転")
     cmds.optionMenu(mode_menu, e=True, value=mode_text)
 
     delete_button = cmds.button(
-        label=u"削除",
+        label="Delete",
         command=lambda *x: delete_rule_row(row_layout)
     )
 
@@ -537,7 +667,7 @@ def create_anim_mirror_ui():
 
     window = cmds.window(
         WINDOW_NAME,
-        title=u"Anim Mirror Custom Tool",
+        title="Anim Mirror Custom Tool",
         sizeable=True,
         widthHeight=(820, 450)
     )
@@ -549,7 +679,7 @@ def create_anim_mirror_ui():
     )
 
     cmds.text(
-        label=u"Keyword と INVERT_ATTRS を設定して、選択リグのアニメーションを反転します。",
+        label="Set Keyword and INVERT_ATTRS, then mirror selected rig animation.",
         align="left"
     )
 
@@ -560,13 +690,17 @@ def create_anim_mirror_ui():
         columnWidth4=(220, 340, 110, 60),
         columnAlign4=("left", "left", "left", "center")
     )
-    cmds.text(label=u"Keyword")
-    cmds.text(label=u"INVERT_ATTRS")
-    cmds.text(label=u"処理タイプ")
+    cmds.text(label="Keyword")
+    cmds.text(label="INVERT_ATTRS")
+    cmds.text(label="Mode")
     cmds.text(label="")
     cmds.setParent("..")
 
-    cmds.columnLayout(RULE_COLUMN, adjustableColumn=True, rowSpacing=4)
+    cmds.columnLayout(
+        RULE_COLUMN,
+        adjustableColumn=True,
+        rowSpacing=4
+    )
 
     for rule in DEFAULT_RULES:
         add_rule_row(
@@ -584,7 +718,7 @@ def create_anim_mirror_ui():
     )
 
     cmds.button(
-        label=u"追加",
+        label="Add",
         width=90,
         command=add_rule_row
     )
@@ -604,7 +738,7 @@ def create_anim_mirror_ui():
         image1="save.png",
         width=36,
         height=32,
-        annotation=u"設定保存",
+        annotation="Save Settings",
         command=save_settings
     )
 
@@ -613,12 +747,12 @@ def create_anim_mirror_ui():
         image1="openScript.png",
         width=36,
         height=32,
-        annotation=u"設定読込",
+        annotation="Import Settings",
         command=import_settings
     )
 
     cmds.button(
-        label=u"反転実行",
+        label="Mirror Execute",
         width=160,
         height=34,
         backgroundColor=(0.55, 0.85, 0.55),
@@ -630,7 +764,7 @@ def create_anim_mirror_ui():
     cmds.separator(height=8, style="none")
 
     cmds.text(
-        label=u"入力例：Keyword = Hand, Foot / INVERT_ATTRS = translateX, translateY, translateZ, rotateY, rotateZ",
+        label="Example: Keyword = Hand, Foot / INVERT_ATTRS = translateX, translateY, translateZ, rotateY, rotateZ",
         align="left"
     )
 
