@@ -1,133 +1,141 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 import maya.cmds as cmds
-import json
 
+
+MODE_SINGLE = "Single"
+MODE_PAIR = "Pair"
+
+WINDOW_NAME = "AnimMirrorV2_UI"
+RULE_COLUMN = "animMirrorRuleColumn"
+FINGER_CHECKBOX = "animMirrorFingerAliasCheckBox"
+RULE_ROWS = []
 
 ALL_ATTRS = [
     "translateX", "translateY", "translateZ",
     "rotateX", "rotateY", "rotateZ"
 ]
 
-WINDOW_NAME = "AnimMirrorCustomUI"
-RULE_ROWS = []
-RULE_COLUMN = "ruleRowsColumn"
+FINGER_ALIAS_KEYWORDS = [
+    "Finger",
+    "Index",
+    "Middle",
+    "Ring",
+    "Pinky",
+    "Little",
+    "Thumb"
+]
+
+ATTR_ALIAS = {
+    "tx": "translateX",
+    "ty": "translateY",
+    "tz": "translateZ",
+    "rx": "rotateX",
+    "ry": "rotateY",
+    "rz": "rotateZ",
+}
 
 DEFAULT_RULES = [
-    {"keywords": "COG, Chest, Pelvis", "attrs": "translateX, rotateY, rotateZ", "mode": "通常反転"},
-    {"keywords": "Hand, Foot", "attrs": "translateX, translateY, translateZ, rotateY, rotateZ", "mode": "左右反転"},
-    {"keywords": "Finger, Shoulder, Toe", "attrs": "rotateY, rotateZ", "mode": "左右反転"},
-    {"keywords": "upVector, LegVector", "attrs": "translateX", "mode": "左右反転"},
+    {"keywords": "COG, Chest, Pelvis", "attrs": "translateX, rotateY, rotateZ", "mode": MODE_SINGLE},
+    {"keywords": "Hand", "attrs": "translateX, translateY, translateZ, rotateY, rotateZ", "mode": MODE_PAIR},
+    {"keywords": "Foot", "attrs": "translateX, rotateY, rotateZ", "mode": MODE_PAIR},
+    {"keywords": "Finger", "attrs": "rotateY, rotateZ", "mode": MODE_PAIR},
+    {"keywords": "upVector, LegVector", "attrs": "translateX", "mode": MODE_PAIR},
 ]
 
 
-def safe_text(text):
+def log(msg):
     try:
-        return unicode(text)
+        print(str(msg))
     except:
-        try:
-            return str(text)
-        except:
-            return ""
+        print("Log failed.")
 
 
-def get_short_name(node):
+def short_name(node):
     return node.split("|")[-1]
 
 
 def remove_namespace(node):
-    short_name = get_short_name(node)
-    if ":" in short_name:
-        return short_name.split(":")[-1]
-    return short_name
-
-
-def get_namespace(node):
-    short_name = get_short_name(node)
-    if ":" in short_name:
-        return short_name.rsplit(":", 1)[0] + ":"
-    return ""
+    name = short_name(node)
+    if ":" in name:
+        return name.split(":")[-1]
+    return name
 
 
 def split_text(text):
     if not text:
         return []
-    return [word.strip() for word in text.split(",") if word.strip()]
+    return [item.strip() for item in text.split(",") if item.strip()]
 
 
-def get_transform(node):
-    if not cmds.objExists(node):
-        return None
-
-    if cmds.nodeType(node) == "transform":
-        return node
-
-    parent = cmds.listRelatives(node, parent=True, fullPath=True) or []
-    return parent[0] if parent else None
+def normalize_attr(attr):
+    return ATTR_ALIAS.get(attr, attr)
 
 
-def is_target_rig(node):
-    shapes = cmds.listRelatives(
-        node,
-        shapes=True,
-        noIntermediate=True,
-        fullPath=True
-    ) or []
+def normalize_attrs(attrs):
+    result = []
+    for attr in attrs:
+        attr = normalize_attr(attr)
+        if attr not in result:
+            result.append(attr)
+    return result
 
-    for shape in shapes:
-        if cmds.nodeType(shape) in ["nurbsCurve", "mesh", "nurbsSurface"]:
-            return True
 
+def is_finger_alias_enabled():
+    if cmds.checkBox(FINGER_CHECKBOX, exists=True):
+        return cmds.checkBox(FINGER_CHECKBOX, q=True, value=True)
     return False
 
 
-def get_selected_rigs():
-    selected = cmds.ls(sl=True, long=True) or []
+def expand_keywords(keywords):
+    if not is_finger_alias_enabled():
+        return keywords
 
-    if not selected:
-        cmds.warning("Please select objects.")
-        return []
-
-    rigs = []
-    exists = set()
-
-    for node in selected:
-        transform = get_transform(node)
-
-        if not transform:
-            continue
-
-        if not is_target_rig(transform):
-            continue
-
-        if transform in exists:
-            continue
-
-        exists.add(transform)
-        rigs.append(transform)
-
-    if not rigs:
-        cmds.warning("Please select NURBS Curve / Mesh / NURBS Surface rigs.")
-
-    return rigs
+    result = []
+    for keyword in keywords:
+        if keyword == "Finger":
+            for alias in FINGER_ALIAS_KEYWORDS:
+                if alias not in result:
+                    result.append(alias)
+        else:
+            if keyword not in result:
+                result.append(keyword)
+    return result
 
 
 def contains_keyword(node, keywords):
-    original_name = remove_namespace(node)
-    return any(keyword in original_name for keyword in keywords)
+    name = remove_namespace(node)
+    keywords = expand_keywords(keywords)
+
+    for keyword in keywords:
+        if keyword in name:
+            return True
+    return False
 
 
-def is_attr_available(node, attr):
+def attr_exists(node, attr):
+    return cmds.objExists(node + "." + attr)
+
+
+def attr_is_locked(node, attr):
     plug = node + "." + attr
 
     if not cmds.objExists(plug):
-        return False
+        return True
 
     try:
-        return not cmds.getAttr(plug, lock=True)
+        return cmds.getAttr(plug, lock=True)
     except:
+        return True
+
+
+def attr_is_available(node, attr):
+    if not attr_exists(node, attr):
         return False
+
+    if attr_is_locked(node, attr):
+        return False
+
+    return True
 
 
 def get_playback_range():
@@ -136,119 +144,225 @@ def get_playback_range():
     return start, end
 
 
-def find_node_by_short_name(short_name):
-    result = cmds.ls(short_name, type="transform", long=True) or []
+def find_node_by_short_name(name):
+    found = cmds.ls(name, type="transform", long=True) or []
 
-    if result:
-        return result[0]
+    if found:
+        return found[0]
 
-    for node in cmds.ls(type="transform", long=True) or []:
-        if get_short_name(node) == short_name:
+    all_nodes = cmds.ls(type="transform", long=True) or []
+
+    for node in all_nodes:
+        if short_name(node) == name:
             return node
 
     return None
 
 
-def get_mirror_object(obj):
-    namespace = get_namespace(obj)
-    original_name = remove_namespace(obj)
+def get_mirror_object(node):
+    ns = get_namespace(node)
+    base = remove_namespace(node)
 
-    if "_L" in original_name:
-        mirror_name = original_name.replace("_L", "_R", 1)
-    elif "_R" in original_name:
-        mirror_name = original_name.replace("_R", "_L", 1)
+    if "_L" in base:
+        mirror_base = base.replace("_L", "_R", 1)
+    elif "_R" in base:
+        mirror_base = base.replace("_R", "_L", 1)
     else:
-        print("No _L/_R token : {}".format(original_name))
+        log("No _L/_R token : " + base)
         return None
 
-    mirror_short_name = namespace + mirror_name
-    mirror_obj = find_node_by_short_name(mirror_short_name)
+    mirror_name = ns + mirror_base
+    mirror_node = find_node_by_short_name(mirror_name)
 
-    print("Find Mirror : {} -> {}".format(obj, mirror_short_name))
-    print("Result      : {}".format(mirror_obj))
+    if mirror_node:
+        log("Mirror found : " + short_name(node) + " -> " + short_name(mirror_node))
+    else:
+        log("Mirror not found : " + short_name(node) + " -> " + mirror_name)
 
-    return mirror_obj
+    return mirror_node
 
 
-def copy_animation_data(obj, attrs, start, end):
-    anim_data = {}
+def get_anim_curve(node, attr):
+    plug = node + "." + attr
+
+    if not cmds.objExists(plug):
+        return None
+
+    curves = cmds.listConnections(
+        plug,
+        source=True,
+        destination=False,
+        type="animCurve"
+    ) or []
+
+    if not curves:
+        return None
+
+    return curves[0]
+
+
+def duplicate_anim_curve(node, attr):
+    curve = get_anim_curve(node, attr)
+
+    if not curve:
+        return None
+
+    try:
+        dup = cmds.duplicate(
+            curve,
+            name=remove_namespace(node) + "_" + attr + "_mirrorTmp#"
+        )[0]
+
+        log("Duplicated animCurve : " + curve + " -> " + dup)
+        return dup
+
+    except Exception as e:
+        log("Failed to duplicate animCurve : " + short_name(node) + "." + attr)
+        log(e)
+
+    return None
+
+
+def duplicate_node_anim_curves(node, attrs):
+    result = {}
 
     for attr in attrs:
-        if not cmds.objExists(obj + "." + attr):
+        attr = normalize_attr(attr)
+
+        if not attr_exists(node, attr):
             continue
 
-        anim_data[attr] = []
+        dup_curve = duplicate_anim_curve(node, attr)
 
-        for frame in range(start, end + 1):
-            cmds.currentTime(frame, edit=True)
+        if dup_curve:
+            result[attr] = dup_curve
 
-            try:
-                value = cmds.getAttr(obj + "." + attr)
-                anim_data[attr].append((frame, value))
-            except:
-                pass
-
-    return anim_data
+    return result
 
 
-def delete_keys(obj, attrs, start, end):
+def disconnect_anim_curve(node, attr):
+    curve = get_anim_curve(node, attr)
+
+    if not curve:
+        return
+
+    plug = node + "." + attr
+    source_plug = curve + ".output"
+
+    try:
+        if cmds.isConnected(source_plug, plug):
+            cmds.disconnectAttr(source_plug, plug)
+            log("Disconnected : " + source_plug + " -> " + plug)
+    except:
+        pass
+
+
+def delete_anim_curve(node, attr):
+    curve = get_anim_curve(node, attr)
+
+    if not curve:
+        return
+
+    disconnect_anim_curve(node, attr)
+
+    try:
+        if cmds.objExists(curve):
+            cmds.delete(curve)
+            log("Deleted old animCurve : " + curve)
+    except:
+        pass
+
+
+def delete_anim_curves_on_attrs(node, attrs):
     for attr in attrs:
-        if not is_attr_available(obj, attr):
+        attr = normalize_attr(attr)
+
+        if not attr_is_available(node, attr):
+            log("Skip delete locked/missing : " + short_name(node) + "." + attr)
             continue
 
-        try:
-            cmds.cutKey(
-                obj,
-                attribute=attr,
-                time=(start, end),
-                option="keys"
-            )
-        except:
-            pass
+        delete_anim_curve(node, attr)
 
 
-def paste_animation_data(obj, anim_data, invert_attrs):
-    for attr, keys in anim_data.items():
-        if not is_attr_available(obj, attr):
-            print("Skip locked or missing attr : {}.{}".format(obj, attr))
-            continue
+def connect_anim_curve(curve, target, attr):
+    if not curve:
+        return False
 
-        for frame, value in keys:
-            cmds.currentTime(frame, edit=True)
+    if not attr_is_available(target, attr):
+        log("Skip connect locked/missing : " + short_name(target) + "." + attr)
+        return False
 
-            paste_value = value * -1.0 if attr in invert_attrs else value
+    source_plug = curve + ".output"
+    target_plug = target + "." + attr
 
-            try:
-                cmds.setAttr(obj + "." + attr, paste_value)
+    try:
+        cmds.connectAttr(
+            source_plug,
+            target_plug,
+            force=True
+        )
 
-                if attr in ["rotateX", "rotateY", "rotateZ"]:
-                    cmds.setKeyframe(
-                        obj,
-                        attribute=attr,
-                        minimizeRotation=True
-                    )
-                else:
-                    cmds.setKeyframe(
-                        obj,
-                        attribute=attr
-                    )
+        log("Connected : " + source_plug + " -> " + short_name(target) + "." + attr)
+        return True
 
-            except:
-                pass
+    except Exception as e:
+        log("Failed to connect animCurve : " + curve + " -> " + short_name(target) + "." + attr)
+        log(e)
+
+    return False
 
 
-def set_rotation_curves_quaternion(obj):
+def scale_anim_curve(curve, start, end, scale_value):
+    if not curve or not cmds.objExists(curve):
+        return
+
+    try:
+        cmds.scaleKey(
+            curve,
+            time=(start, end),
+            valueScale=scale_value,
+            valuePivot=0.0
+        )
+
+        log("Scaled curve : " + curve)
+
+    except Exception as e:
+        log("scale animCurve failed : " + curve)
+        log(e)
+
+
+def scale_keys(node, attr, start, end, scale_value):
+    if not attr_is_available(node, attr):
+        return
+
+    try:
+        cmds.scaleKey(
+            node,
+            attribute=attr,
+            time=(start, end),
+            valueScale=scale_value,
+            valuePivot=0.0
+        )
+
+        log("Scaled : " + short_name(node) + "." + attr)
+
+    except Exception as e:
+        log("scaleKey failed : " + short_name(node) + "." + attr)
+        log(e)
+
+
+def set_rotation_interpolation(node):
     for attr in ["rotateX", "rotateY", "rotateZ"]:
-        plug = obj + "." + attr
+        plug = node + "." + attr
 
-        anim_curves = cmds.listConnections(
+        curves = cmds.listConnections(
             plug,
             source=True,
             destination=False,
             type="animCurve"
         ) or []
 
-        for curve in anim_curves:
+        for curve in curves:
             try:
                 cmds.rotationInterpolation(
                     curve,
@@ -258,132 +372,121 @@ def set_rotation_curves_quaternion(obj):
                 pass
 
 
-def create_temp_locator_from_anim(obj, anim_data):
-    locator = cmds.spaceLocator(
-        name=remove_namespace(obj) + "_Locator"
-    )[0]
+def mirror_single(node, invert_attrs, start, end):
+    log("Single start : " + short_name(node))
 
-    print("Create temp locator : {}".format(locator))
+    invert_attrs = normalize_attrs(invert_attrs)
 
-    paste_animation_data(
-        locator,
-        anim_data,
-        invert_attrs=[]
-    )
-
-    return locator
-
-
-def mirror_single_rig(obj, start, end, invert_attrs):
-    print("Single Mirror : {}".format(obj))
-
-    anim_data = copy_animation_data(
-        obj,
-        ALL_ATTRS,
-        start,
-        end
-    )
-
-    delete_keys(
-        obj,
-        ALL_ATTRS,
-        start,
-        end
-    )
-
-    paste_animation_data(
-        obj,
-        anim_data,
+    curves = duplicate_node_anim_curves(
+        node,
         invert_attrs
     )
 
-    set_rotation_curves_quaternion(obj)
-
-
-def mirror_pair_rig(obj, start, end, invert_attrs):
-    mirror_obj = get_mirror_object(obj)
-
-    if not mirror_obj:
-        cmds.warning("Mirror object was not found.")
+    if not curves:
+        log("No animCurves : " + short_name(node))
         return False
 
-    obj_name = remove_namespace(obj)
+    try:
+        delete_anim_curves_on_attrs(
+            node,
+            curves.keys()
+        )
 
-    if "_L" in obj_name:
-        left_obj = obj
-        right_obj = mirror_obj
-    elif "_R" in obj_name:
-        left_obj = mirror_obj
-        right_obj = obj
+        for attr, curve in curves.items():
+            scale_anim_curve(
+                curve,
+                start,
+                end,
+                -1.0
+            )
+
+            connect_anim_curve(
+                curve,
+                node,
+                attr
+            )
+
+        set_rotation_interpolation(node)
+
+        log("Single complete : " + short_name(node))
+        return True
+
+    except Exception as e:
+        log("Single failed : " + short_name(node))
+        log(e)
+
+    return False
+
+
+def mirror_pair(node, invert_attrs, start, end):
+    mirror_node = get_mirror_object(node)
+
+    if not mirror_node:
+        return False
+
+    base = remove_namespace(node)
+
+    if "_L" in base:
+        left_node = node
+        right_node = mirror_node
+    elif "_R" in base:
+        left_node = mirror_node
+        right_node = node
     else:
         return False
 
-    print("Pair Mirror Start")
-    print("Left  : {}".format(left_obj))
-    print("Right : {}".format(right_obj))
-    print("Invert Attrs : {}".format(invert_attrs))
+    log("Pair start")
+    log("Left  : " + short_name(left_node))
+    log("Right : " + short_name(right_node))
 
-    left_data = copy_animation_data(
-        left_obj,
-        ALL_ATTRS,
-        start,
-        end
-    )
+    attrs = normalize_attrs(ALL_ATTRS)
+    invert_attrs = normalize_attrs(invert_attrs)
 
-    right_data = copy_animation_data(
-        right_obj,
-        ALL_ATTRS,
-        start,
-        end
-    )
+    left_curves = duplicate_node_anim_curves(left_node, attrs)
+    right_curves = duplicate_node_anim_curves(right_node, attrs)
 
-    temp_locator = create_temp_locator_from_anim(
-        left_obj,
-        left_data
-    )
+    all_target_attrs = []
 
-    locator_data = copy_animation_data(
-        temp_locator,
-        ALL_ATTRS,
-        start,
-        end
-    )
+    for attr in attrs:
+        if attr in left_curves or attr in right_curves:
+            all_target_attrs.append(attr)
 
-    delete_keys(
-        left_obj,
-        ALL_ATTRS,
-        start,
-        end
-    )
+    if not all_target_attrs:
+        log("No animCurves in pair.")
+        return False
 
-    delete_keys(
-        right_obj,
-        ALL_ATTRS,
-        start,
-        end
-    )
+    log("Swap attrs : " + ", ".join(all_target_attrs))
 
-    paste_animation_data(
-        left_obj,
-        right_data,
-        invert_attrs
-    )
+    try:
+        delete_anim_curves_on_attrs(left_node, all_target_attrs)
+        delete_anim_curves_on_attrs(right_node, all_target_attrs)
 
-    paste_animation_data(
-        right_obj,
-        locator_data,
-        invert_attrs
-    )
+        for attr in invert_attrs:
+            if attr in right_curves:
+                scale_anim_curve(right_curves[attr], start, end, -1.0)
 
-    set_rotation_curves_quaternion(left_obj)
-    set_rotation_curves_quaternion(right_obj)
+            if attr in left_curves:
+                scale_anim_curve(left_curves[attr], start, end, -1.0)
 
-    if cmds.objExists(temp_locator):
-        cmds.delete(temp_locator)
+        for attr in all_target_attrs:
+            if attr in right_curves:
+                connect_anim_curve(right_curves[attr], left_node, attr)
 
-    print("Pair Mirror End")
+        for attr in all_target_attrs:
+            if attr in left_curves:
+                connect_anim_curve(left_curves[attr], right_node, attr)
 
-    return True
+        set_rotation_interpolation(left_node)
+        set_rotation_interpolation(right_node)
+
+        log("Pair complete")
+        return True
+
+    except Exception as e:
+        log("Pair failed.")
+        log(e)
+
+    return False
 
 
 def get_ui_rules():
@@ -393,136 +496,42 @@ def get_ui_rules():
         if not cmds.rowLayout(row["layout"], exists=True):
             continue
 
-        keyword_text = cmds.textField(row["keyword"], q=True, text=True)
-        attr_text = cmds.textField(row["attrs"], q=True, text=True)
+        keywords_text = cmds.textField(row["keywords"], q=True, text=True)
+        attrs_text = cmds.textField(row["attrs"], q=True, text=True)
         mode_text = cmds.optionMenu(row["mode"], q=True, value=True)
 
-        keywords = split_text(keyword_text)
-        invert_attrs = split_text(attr_text)
+        keywords = split_text(keywords_text)
+        invert_attrs = normalize_attrs(split_text(attrs_text))
 
-        if keywords and invert_attrs:
-            rules.append({
-                "keywords": keywords,
-                "invert_attrs": invert_attrs,
-                "mode": mode_text
-            })
+        if not keywords or not invert_attrs:
+            continue
+
+        rules.append({
+            "keywords": keywords,
+            "invert_attrs": invert_attrs,
+            "mode": mode_text
+        })
 
     return rules
 
 
-def get_ui_rules_for_save():
-    save_data = []
+def execute_from_ui(*args):
+    nodes = get_selected_transforms()
 
-    for row in RULE_ROWS:
-        if not cmds.rowLayout(row["layout"], exists=True):
-            continue
-
-        save_data.append({
-            "keywords": cmds.textField(row["keyword"], q=True, text=True),
-            "attrs": cmds.textField(row["attrs"], q=True, text=True),
-            "mode": cmds.optionMenu(row["mode"], q=True, value=True)
-        })
-
-    return save_data
-
-
-def clear_rule_rows():
-    global RULE_ROWS
-
-    for row in list(RULE_ROWS):
-        if cmds.rowLayout(row["layout"], exists=True):
-            cmds.deleteUI(row["layout"])
-
-    RULE_ROWS = []
-
-
-def load_rules_to_ui(rules):
-    clear_rule_rows()
-
-    for rule in rules:
-        add_rule_row(
-            keyword_text=rule.get("keywords", ""),
-            attr_text=rule.get("attrs", ""),
-            mode_text=rule.get("mode", "左右反転")
-        )
-
-
-def save_settings(*args):
-    file_path = cmds.fileDialog2(
-        fileMode=0,
-        caption="Save Settings",
-        fileFilter="JSON Files (*.json)"
-    )
-
-    if not file_path:
-        return
-
-    data = {
-        "animMirrorSettings": get_ui_rules_for_save()
-    }
-
-    try:
-        with open(file_path[0], "w") as f:
-            json.dump(data, f, indent=4)
-
-        cmds.confirmDialog(
-            title="Saved",
-            message="Settings saved.",
-            button=["OK"]
-        )
-
-    except Exception as e:
-        cmds.warning("Failed to save settings.")
-        print("Save Error : {}".format(safe_text(e)))
-
-
-def import_settings(*args):
-    file_path = cmds.fileDialog2(
-        fileMode=1,
-        caption="Import Settings",
-        fileFilter="JSON Files (*.json)"
-    )
-
-    if not file_path:
-        return
-
-    try:
-        with open(file_path[0], "r") as f:
-            data = json.load(f)
-
-        rules = data.get("animMirrorSettings", [])
-
-        if not rules:
-            cmds.warning("No settings found in file.")
-            return
-
-        load_rules_to_ui(rules)
-
-        cmds.confirmDialog(
-            title="Imported",
-            message="Settings imported.",
-            button=["OK"]
-        )
-
-    except Exception as e:
-        cmds.warning("Failed to import settings.")
-        print("Import Error : {}".format(safe_text(e)))
-
-
-def execute_anim_mirror_from_ui(*args):
-    rigs = get_selected_rigs()
-
-    if not rigs:
+    if not nodes:
         return
 
     rules = get_ui_rules()
 
     if not rules:
-        cmds.warning("Please input Keyword and INVERT_ATTRS.")
+        cmds.warning("Please input rules.")
         return
 
     start, end = get_playback_range()
-    current_time = cmds.currentTime(q=True)
+
+    log("AnimMirror V2 UI version start")
+    log("Frame range : " + str(start) + " - " + str(end))
+    log("Selected count : " + str(len(nodes)))
 
     processed_pairs = set()
     processed_count = 0
@@ -537,73 +546,55 @@ def execute_anim_mirror_from_ui(*args):
             invert_attrs = rule["invert_attrs"]
             mode = rule["mode"]
 
-            print("----- Rule Check -----")
-            print("Keywords     : {}".format(keywords))
-            print("Invert Attrs : {}".format(invert_attrs))
-            print("Mode         : {}".format(mode))
+            log("----- Rule -----")
+            log("Keywords : " + ", ".join(keywords))
+            log("Invert attrs : " + ", ".join(invert_attrs))
+            log("Mode : " + mode)
 
-            for obj in rigs:
-                if not contains_keyword(obj, keywords):
+            for node in nodes:
+                if not contains_keyword(node, keywords):
                     continue
 
-                print("Matched Rig  : {}".format(obj))
+                log("Matched : " + short_name(node))
 
-                if mode == "通常反転":
-                    mirror_single_rig(
-                        obj,
-                        start,
-                        end,
-                        invert_attrs
-                    )
-                    processed_count += 1
+                if mode == MODE_SINGLE:
+                    if mirror_single(node, invert_attrs, start, end):
+                        processed_count += 1
 
-                elif mode == "左右反転":
-                    mirror_obj = get_mirror_object(obj)
+                elif mode == MODE_PAIR:
+                    mirror_node = get_mirror_object(node)
 
-                    if not mirror_obj:
-                        cmds.warning("Mirror object was not found.")
+                    if not mirror_node:
                         continue
-
-                    print("Mirror Pair  : {} <-> {}".format(obj, mirror_obj))
 
                     pair_key = tuple(
                         sorted([
-                            get_short_name(obj),
-                            get_short_name(mirror_obj)
+                            short_name(node),
+                            short_name(mirror_node)
                         ])
                     )
 
                     if pair_key in processed_pairs:
-                        print("Skip already processed pair : {}".format(pair_key))
+                        log("Skip processed pair.")
                         continue
 
                     processed_pairs.add(pair_key)
 
-                    result = mirror_pair_rig(
-                        obj,
-                        start,
-                        end,
-                        invert_attrs
-                    )
-
-                    if result:
+                    if mirror_pair(node, invert_attrs, start, end):
                         processed_count += 1
 
-        cmds.currentTime(current_time, edit=True)
-
         if processed_count == 0:
-            cmds.warning("No target rigs were processed. Please check Keyword and _L/_R names.")
+            cmds.warning("No target rigs were processed.")
         else:
             cmds.confirmDialog(
                 title="Complete",
-                message="Animation mirror completed. Count: {}".format(processed_count),
+                message="Animation mirror completed. Count: " + str(processed_count),
                 button=["OK"]
             )
 
     except Exception as e:
         cmds.warning("Mirror failed. Check Script Editor.")
-        print("Mirror Error : {}".format(safe_text(e)))
-        cmds.currentTime(current_time, edit=True)
+        log(e)
 
     finally:
         cmds.refresh(suspend=False)
@@ -620,11 +611,11 @@ def delete_rule_row(row_layout):
         cmds.deleteUI(row_layout)
 
 
-def add_rule_row(keyword_text="", attr_text="", mode_text="左右反転", *args):
+def add_rule_row(keyword_text="", attr_text="", mode_text=MODE_PAIR, *args):
     row_layout = cmds.rowLayout(
         numberOfColumns=4,
+        columnWidth4=(220, 360, 90, 60),
         adjustableColumn=2,
-        columnWidth4=(220, 340, 110, 60),
         columnAlign4=("left", "left", "left", "center"),
         parent=RULE_COLUMN
     )
@@ -634,14 +625,14 @@ def add_rule_row(keyword_text="", attr_text="", mode_text="左右反転", *args)
         annotation="Example: Hand, Foot"
     )
 
-    attrs_field = cmds.textField(
+    attr_field = cmds.textField(
         text=attr_text,
         annotation="Example: translateX, translateY, rotateZ"
     )
 
     mode_menu = cmds.optionMenu()
-    cmds.menuItem(label="通常反転")
-    cmds.menuItem(label="左右反転")
+    cmds.menuItem(label=MODE_SINGLE)
+    cmds.menuItem(label=MODE_PAIR)
     cmds.optionMenu(mode_menu, e=True, value=mode_text)
 
     delete_button = cmds.button(
@@ -651,14 +642,14 @@ def add_rule_row(keyword_text="", attr_text="", mode_text="左右反転", *args)
 
     RULE_ROWS.append({
         "layout": row_layout,
-        "keyword": keyword_field,
-        "attrs": attrs_field,
+        "keywords": keyword_field,
+        "attrs": attr_field,
         "mode": mode_menu,
         "delete": delete_button
     })
 
 
-def create_anim_mirror_ui():
+def create_ui():
     global RULE_ROWS
     RULE_ROWS = []
 
@@ -667,19 +658,19 @@ def create_anim_mirror_ui():
 
     window = cmds.window(
         WINDOW_NAME,
-        title="Anim Mirror Custom Tool",
+        title="Anim Mirror V2 - Attribute Test UI",
         sizeable=True,
-        widthHeight=(820, 450)
+        widthHeight=(820, 420)
     )
 
-    main_layout = cmds.columnLayout(
+    main = cmds.columnLayout(
         adjustableColumn=True,
         rowSpacing=8,
         columnOffset=("both", 12)
     )
 
     cmds.text(
-        label="Set Keyword and INVERT_ATTRS, then mirror selected rig animation.",
+        label="Set keyword and invert attributes. Select rigs and execute.",
         align="left"
     )
 
@@ -687,13 +678,15 @@ def create_anim_mirror_ui():
 
     cmds.rowLayout(
         numberOfColumns=4,
-        columnWidth4=(220, 340, 110, 60),
+        columnWidth4=(220, 360, 90, 60),
         columnAlign4=("left", "left", "left", "center")
     )
+
     cmds.text(label="Keyword")
     cmds.text(label="INVERT_ATTRS")
     cmds.text(label="Mode")
     cmds.text(label="")
+
     cmds.setParent("..")
 
     cmds.columnLayout(
@@ -709,66 +702,36 @@ def create_anim_mirror_ui():
             mode_text=rule["mode"]
         )
 
-    cmds.setParent(main_layout)
-
-    cmds.rowLayout(
-        numberOfColumns=1,
-        columnWidth1=100,
-        columnAlign1="left"
-    )
+    cmds.setParent(main)
 
     cmds.button(
         label="Add",
         width=90,
         command=add_rule_row
     )
-
-    cmds.setParent(main_layout)
+    
+    cmds.checkBox(
+        FINGER_CHECKBOX,
+        label="Treat Index / Thumb etc. as Finger",
+        value=True
+    )
 
     cmds.separator(height=8, style="in")
-
-    cmds.rowLayout(
-        numberOfColumns=3,
-        columnWidth3=(50, 50, 180),
-        columnAlign3=("left", "left", "left")
-    )
-
-    cmds.iconTextButton(
-        style="iconOnly",
-        image1="save.png",
-        width=36,
-        height=32,
-        annotation="Save Settings",
-        command=save_settings
-    )
-
-    cmds.iconTextButton(
-        style="iconOnly",
-        image1="openScript.png",
-        width=36,
-        height=32,
-        annotation="Import Settings",
-        command=import_settings
-    )
 
     cmds.button(
         label="Mirror Execute",
         width=160,
         height=34,
         backgroundColor=(0.55, 0.85, 0.55),
-        command=execute_anim_mirror_from_ui
+        command=execute_from_ui
     )
 
-    cmds.setParent(main_layout)
-
-    cmds.separator(height=8, style="none")
-
     cmds.text(
-        label="Example: Keyword = Hand, Foot / INVERT_ATTRS = translateX, translateY, translateZ, rotateY, rotateZ",
+        label="Tip: Use tx, ty, tz, rx, ry, rz or translateX, translateY, translateZ, rotateX, rotateY, rotateZ.",
         align="left"
     )
 
     cmds.showWindow(window)
 
 
-create_anim_mirror_ui()
+create_ui()
