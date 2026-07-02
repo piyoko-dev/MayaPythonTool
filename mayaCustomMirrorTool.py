@@ -212,14 +212,14 @@ def get_mirror_object(node):
     ns = get_namespace(node)
     base = remove_namespace(node)
 
-    if "_L" in base:
-        mirror_base = base.replace("_L", "_R", 1)
-    elif "_R" in base:
-        mirror_base = base.replace("_R", "_L", 1)
+    if base.endswith("_L"):
+        mirror_base = base[:-2] + "_R"
+    elif base.endswith("_R"):
+        mirror_base = base[:-2] + "_L"
     elif base.startswith("L_"):
-        mirror_base = base.replace("L_", "R_", 1)
+        mirror_base = "R_" + base[2:]
     elif base.startswith("R_"):
-        mirror_base = base.replace("R_", "L_", 1)
+        mirror_base = "L_" + base[2:]
     else:
         log("No L/R token : " + base)
         return None
