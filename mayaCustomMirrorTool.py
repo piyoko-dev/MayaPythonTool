@@ -5,7 +5,7 @@ import maya.cmds as cmds
 MODE_SINGLE = "Single"
 MODE_PAIR = "Pair"
 
-WINDOW_NAME = "AnimMirrorV3_UI"
+WINDOW_NAME = "AnimMirrorV2_UI"
 RULE_COLUMN = "animMirrorRuleColumn"
 FINGER_CHECKBOX = "animMirrorFingerAliasCheckBox"
 RULE_ROWS = []
@@ -107,7 +107,6 @@ def get_selected_transforms():
 
     for node in selected:
         transform = get_transform(node)
-
         if not transform:
             continue
 
@@ -116,6 +115,9 @@ def get_selected_transforms():
 
         exists.add(transform)
         result.append(transform)
+
+    if not result:
+        cmds.warning("No valid transform selected.")
 
     return result
 
@@ -131,7 +133,6 @@ def expand_keywords(keywords):
         return keywords
 
     result = []
-
     for keyword in keywords:
         if keyword == "Finger":
             for alias in FINGER_ALIAS_KEYWORDS:
@@ -189,21 +190,6 @@ def find_node_by_short_name(name):
     for node in cmds.ls(type="transform", long=True) or []:
         if short_name(node) == name:
             return node
-
-    return None
-
-
-def get_lr_side(node):
-    base = remove_namespace(node)
-
-    if "_L" in base:
-        return "L"
-    if "_R" in base:
-        return "R"
-    if base.startswith("L_"):
-        return "L"
-    if base.startswith("R_"):
-        return "R"
 
     return None
 
@@ -352,6 +338,7 @@ def connect_anim_curve(curve, target, attr):
         cmds.connectAttr(source_plug, target_plug, force=True)
         log("Connected : " + source_plug + " -> " + short_name(target) + "." + attr)
         return True
+
     except Exception as e:
         log("Failed to connect animCurve : " + curve + " -> " + short_name(target) + "." + attr)
         log(e)
@@ -370,6 +357,7 @@ def scale_anim_curve(curve, start, end, scale_value):
             valueScale=scale_value,
             valuePivot=0.0
         )
+
         log("Scaled curve : " + curve)
 
     except Exception as e:
@@ -413,6 +401,7 @@ def mirror_single(node, invert_attrs, start, end):
             connect_anim_curve(curve, node, attr)
 
         set_rotation_interpolation(node)
+
         log("Single complete : " + short_name(node))
         return True
 
@@ -424,19 +413,21 @@ def mirror_single(node, invert_attrs, start, end):
 
 
 def mirror_pair(node, invert_attrs, start, end):
-    side = get_lr_side(node)
-
-    if side != "L":
-        log("Skip non-left pair node : " + short_name(node))
-        return False
-
     mirror_node = get_mirror_object(node)
 
     if not mirror_node:
         return False
 
-    left_node = node
-    right_node = mirror_node
+    base = remove_namespace(node)
+
+    if base.endswith("_L") or base.startswith("L_"):
+        left_node = node
+        right_node = mirror_node
+    elif base.endswith("_R") or base.startswith("R_"):
+        left_node = mirror_node
+        right_node = node
+    else:
+        return False
 
     log("Pair start")
     log("Left  : " + short_name(left_node))
@@ -532,10 +523,11 @@ def execute_from_ui(*args):
 
     start, end = get_playback_range()
 
-    log("AnimMirror V3 start")
+    log("AnimMirror V2 start")
     log("Frame range : " + str(start) + " - " + str(end))
     log("Selected count : " + str(len(nodes)))
 
+    processed_pairs = set()
     processed_count = 0
 
     cmds.undoInfo(openChunk=True)
@@ -564,6 +556,19 @@ def execute_from_ui(*args):
                         processed_count += 1
 
                 elif mode == MODE_PAIR:
+                    mirror_node = get_mirror_object(node)
+
+                    if not mirror_node:
+                        continue
+
+                    pair_key = tuple(sorted([node, mirror_node]))
+
+                    if pair_key in processed_pairs:
+                        log("Skip processed pair.")
+                        continue
+
+                    processed_pairs.add(pair_key)
+
                     if mirror_pair(node, invert_attrs, start, end):
                         processed_count += 1
 
@@ -642,7 +647,7 @@ def create_ui():
 
     window = cmds.window(
         WINDOW_NAME,
-        title="Anim Mirror V3",
+        title="Anim Mirror V2",
         sizeable=True,
         widthHeight=(820, 420)
     )
@@ -654,7 +659,7 @@ def create_ui():
     )
 
     cmds.text(
-        label="Set keyword and invert attributes. Pair mode runs left side only.",
+        label="Set keyword and invert attributes. Select rigs and execute.",
         align="left"
     )
 
@@ -711,7 +716,7 @@ def create_ui():
     )
 
     cmds.text(
-        label="Tip: Pair mode only executes nodes with _L or L_ names. R side is skipped.",
+        label="Tip: Use tx, ty, tz, rx, ry, rz or translateX, translateY, translateZ, rotateX, rotateY, rotateZ.",
         align="left"
     )
 
