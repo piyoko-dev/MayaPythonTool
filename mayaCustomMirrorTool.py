@@ -5,7 +5,7 @@ import maya.cmds as cmds
 MODE_SINGLE = "Single"
 MODE_PAIR = "Pair"
 
-WINDOW_NAME = "AnimMirrorV2_UI"
+WINDOW_NAME = "AnimMirrorV4_UI"
 RULE_COLUMN = "animMirrorRuleColumn"
 FINGER_CHECKBOX = "animMirrorFingerAliasCheckBox"
 RULE_ROWS = []
@@ -29,11 +29,11 @@ ATTR_ALIAS = {
 }
 
 DEFAULT_RULES = [
-    {"keywords": "COG, Chest, Pelvis", "attrs": "translateX, rotateY, rotateZ", "mode": MODE_SINGLE},
+    {"keywords": "COG, Chest, Pelvis, Head, Neck", "attrs": "translateX, rotateY, rotateZ", "mode": MODE_SINGLE},
+    {"keywords": "Arm_Upv, Leg_Upv", "attrs": "translateX", "mode": MODE_PAIR},
     {"keywords": "Hand", "attrs": "translateX, translateY, translateZ, rotateY, rotateZ", "mode": MODE_PAIR},
     {"keywords": "Foot", "attrs": "translateX, rotateY, rotateZ", "mode": MODE_PAIR},
     {"keywords": "Finger", "attrs": "rotateY, rotateZ", "mode": MODE_PAIR},
-    {"keywords": "Arm_Upv, Leg_Upv", "attrs": "translateX", "mode": MODE_PAIR},
 ]
 
 
@@ -84,14 +84,12 @@ def normalize_attrs(attrs):
 def get_transform(node):
     if not cmds.objExists(node):
         return None
-
     if cmds.nodeType(node) == "transform":
         return node
 
     parent = cmds.listRelatives(node, parent=True, fullPath=True) or []
     if parent:
         return parent[0]
-
     return None
 
 
@@ -109,7 +107,6 @@ def get_selected_transforms():
         transform = get_transform(node)
         if not transform:
             continue
-
         if transform in exists:
             continue
 
@@ -133,6 +130,7 @@ def expand_keywords(keywords):
         return keywords
 
     result = []
+
     for keyword in keywords:
         if keyword == "Finger":
             for alias in FINGER_ALIAS_KEYWORDS:
@@ -145,24 +143,12 @@ def expand_keywords(keywords):
     return result
 
 
-def contains_keyword(node, keywords):
-    name = remove_namespace(node)
-    keywords = expand_keywords(keywords)
-
-    for keyword in keywords:
-        if keyword in name:
-            return True
-
-    return False
-
-
 def attr_exists(node, attr):
     return cmds.objExists(node + "." + attr)
 
 
 def attr_is_locked(node, attr):
     plug = node + "." + attr
-
     if not cmds.objExists(plug):
         return True
 
@@ -190,6 +176,21 @@ def find_node_by_short_name(name):
     for node in cmds.ls(type="transform", long=True) or []:
         if short_name(node) == name:
             return node
+
+    return None
+
+
+def get_lr_side(node):
+    base = remove_namespace(node)
+
+    if base.endswith("_L"):
+        return "L"
+    if base.endswith("_R"):
+        return "R"
+    if base.startswith("L_"):
+        return "L"
+    if base.startswith("R_"):
+        return "R"
 
     return None
 
@@ -412,23 +413,7 @@ def mirror_single(node, invert_attrs, start, end):
     return False
 
 
-def mirror_pair(node, invert_attrs, start, end):
-    mirror_node = get_mirror_object(node)
-
-    if not mirror_node:
-        return False
-
-    base = remove_namespace(node)
-
-    if base.endswith("_L") or base.startswith("L_"):
-        left_node = node
-        right_node = mirror_node
-    elif base.endswith("_R") or base.startswith("R_"):
-        left_node = mirror_node
-        right_node = node
-    else:
-        return False
-
+def mirror_pair_nodes(left_node, right_node, invert_attrs, start, end):
     log("Pair start")
     log("Left  : " + short_name(left_node))
     log("Right : " + short_name(right_node))
@@ -458,7 +443,6 @@ def mirror_pair(node, invert_attrs, start, end):
         for attr in invert_attrs:
             if attr in right_curves:
                 scale_anim_curve(right_curves[attr], start, end, -1.0)
-
             if attr in left_curves:
                 scale_anim_curve(left_curves[attr], start, end, -1.0)
 
@@ -481,6 +465,79 @@ def mirror_pair(node, invert_attrs, start, end):
         log(e)
 
     return False
+
+
+def get_best_rule_for_node(node, rules):
+    name = remove_namespace(node)
+
+    best_rule = None
+    best_score = -1
+
+    for rule in rules:
+        keywords = expand_keywords(rule["keywords"])
+
+        for keyword in keywords:
+            if keyword in name:
+                score = len(keyword)
+
+                if score > best_score:
+                    best_score = score
+                    best_rule = rule
+
+    return best_rule, best_score
+
+
+def build_operations(nodes, rules):
+    single_ops = []
+    pair_dict = {}
+
+    for node in nodes:
+        rule, score = get_best_rule_for_node(node, rules)
+
+        if not rule:
+            log("No rule matched : " + short_name(node))
+            continue
+
+        log("Best rule for " + short_name(node) + " : " + ", ".join(rule["keywords"]))
+
+        if rule["mode"] == MODE_SINGLE:
+            single_ops.append({
+                "node": node,
+                "invert_attrs": rule["invert_attrs"]
+            })
+
+        elif rule["mode"] == MODE_PAIR:
+            mirror_node = get_mirror_object(node)
+
+            if not mirror_node:
+                continue
+
+            side = get_lr_side(node)
+
+            if side == "L":
+                left_node = node
+                right_node = mirror_node
+            elif side == "R":
+                left_node = mirror_node
+                right_node = node
+            else:
+                continue
+
+            pair_key = tuple(sorted([left_node, right_node]))
+
+            if pair_key not in pair_dict:
+                pair_dict[pair_key] = {
+                    "left": left_node,
+                    "right": right_node,
+                    "invert_attrs": rule["invert_attrs"],
+                    "score": score
+                }
+            else:
+                if score > pair_dict[pair_key]["score"]:
+                    pair_dict[pair_key]["invert_attrs"] = rule["invert_attrs"]
+                    pair_dict[pair_key]["score"] = score
+
+    return single_ops, pair_dict
 
 
 def get_ui_rules():
@@ -523,11 +580,15 @@ def execute_from_ui(*args):
 
     start, end = get_playback_range()
 
-    log("AnimMirror V2 start")
+    log("AnimMirror V4 start")
     log("Frame range : " + str(start) + " - " + str(end))
     log("Selected count : " + str(len(nodes)))
 
-    processed_pairs = set()
+    single_ops, pair_dict = build_operations(nodes, rules)
+
+    log("Single op count : " + str(len(single_ops)))
+    log("Pair op count : " + str(len(pair_dict)))
+
     processed_count = 0
 
     cmds.undoInfo(openChunk=True)
@@ -535,43 +596,13 @@ def execute_from_ui(*args):
     try:
         cmds.refresh(suspend=True)
 
-        for rule in rules:
-            keywords = rule["keywords"]
-            invert_attrs = rule["invert_attrs"]
-            mode = rule["mode"]
+        for op in single_ops:
+            if mirror_single(op["node"], op["invert_attrs"], start, end):
+                processed_count += 1
 
-            log("----- Rule -----")
-            log("Keywords : " + ", ".join(keywords))
-            log("Invert attrs : " + ", ".join(invert_attrs))
-            log("Mode : " + mode)
-
-            for node in nodes:
-                if not contains_keyword(node, keywords):
-                    continue
-
-                log("Matched : " + short_name(node))
-
-                if mode == MODE_SINGLE:
-                    if mirror_single(node, invert_attrs, start, end):
-                        processed_count += 1
-
-                elif mode == MODE_PAIR:
-                    mirror_node = get_mirror_object(node)
-
-                    if not mirror_node:
-                        continue
-
-                    pair_key = tuple(sorted([node, mirror_node]))
-
-                    if pair_key in processed_pairs:
-                        log("Skip processed pair.")
-                        continue
-
-                    result = mirror_pair(node, invert_attrs, start, end)
-
-                    if result:
-                        processed_pairs.add(pair_key)
-                        processed_count += 1
+        for pair_key, op in pair_dict.items():
+            if mirror_pair_nodes(op["left"], op["right"], op["invert_attrs"], start, end):
+                processed_count += 1
 
         if processed_count == 0:
             cmds.warning("No target rigs were processed.")
@@ -648,7 +679,7 @@ def create_ui():
 
     window = cmds.window(
         WINDOW_NAME,
-        title="Anim Mirror V2",
+        title="Anim Mirror V4",
         sizeable=True,
         widthHeight=(820, 420)
     )
@@ -660,7 +691,7 @@ def create_ui():
     )
 
     cmds.text(
-        label="Set keyword and invert attributes. Select rigs and execute.",
+        label="V4: Build pair operations first. Longest keyword wins.",
         align="left"
     )
 
@@ -717,7 +748,7 @@ def create_ui():
     )
 
     cmds.text(
-        label="Tip: Use tx, ty, tz, rx, ry, rz or translateX, translateY, translateZ, rotateX, rotateY, rotateZ.",
+        label="Tip: If rules overlap, the longest matching keyword is used.",
         align="left"
     )
 
