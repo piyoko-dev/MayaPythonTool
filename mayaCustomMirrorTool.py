@@ -567,9 +567,10 @@ def execute_from_ui(*args):
                         log("Skip processed pair.")
                         continue
 
-                    processed_pairs.add(pair_key)
+                    result = mirror_pair(node, invert_attrs, start, end)
 
-                    if mirror_pair(node, invert_attrs, start, end):
+                    if result:
+                        processed_pairs.add(pair_key)
                         processed_count += 1
 
         if processed_count == 0:
