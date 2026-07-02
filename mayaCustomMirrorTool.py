@@ -601,8 +601,8 @@ def execute_from_ui(*args):
 
                     pair_key = tuple(
                         sorted([
-                            short_name(node),
-                            short_name(mirror_node)
+                            node,
+                            mirror_node
                         ])
                     )
 
