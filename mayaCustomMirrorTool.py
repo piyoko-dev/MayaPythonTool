@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import maya.cmds as cmds
+import json
 
 
 MODE_SINGLE = "Single"
@@ -539,6 +540,10 @@ def build_operations(nodes, rules):
     return single_ops, pair_dict
 
 
+# ============================================================
+# UI rules / JSON
+# ============================================================
+
 def get_ui_rules():
     rules = []
 
@@ -564,6 +569,109 @@ def get_ui_rules():
 
     return rules
 
+
+def get_ui_rules_for_save():
+    save_data = []
+
+    for row in RULE_ROWS:
+        if not cmds.rowLayout(row["layout"], exists=True):
+            continue
+
+        save_data.append({
+            "keywords": cmds.textField(row["keywords"], q=True, text=True),
+            "attrs": cmds.textField(row["attrs"], q=True, text=True),
+            "mode": cmds.optionMenu(row["mode"], q=True, value=True)
+        })
+
+    return save_data
+
+
+def clear_rule_rows():
+    global RULE_ROWS
+
+    for row in list(RULE_ROWS):
+        if cmds.rowLayout(row["layout"], exists=True):
+            cmds.deleteUI(row["layout"])
+
+    RULE_ROWS = []
+
+
+def load_rules_to_ui(rules):
+    clear_rule_rows()
+
+    for rule in rules:
+        add_rule_row(
+            keyword_text=rule.get("keywords", ""),
+            attr_text=rule.get("attrs", ""),
+            mode_text=rule.get("mode", MODE_PAIR)
+        )
+
+
+def save_settings(*args):
+    file_path = cmds.fileDialog2(
+        fileMode=0,
+        caption="Save Settings",
+        fileFilter="JSON Files (*.json)"
+    )
+
+    if not file_path:
+        return
+
+    data = {
+        "animMirrorSettings": get_ui_rules_for_save()
+    }
+
+    try:
+        with open(file_path[0], "w") as f:
+            json.dump(data, f, indent=4)
+
+        cmds.confirmDialog(
+            title="Saved",
+            message="Settings saved.",
+            button=["OK"]
+        )
+
+    except Exception as e:
+        cmds.warning("Failed to save settings.")
+        log(e)
+
+
+def import_settings(*args):
+    file_path = cmds.fileDialog2(
+        fileMode=1,
+        caption="Import Settings",
+        fileFilter="JSON Files (*.json)"
+    )
+
+    if not file_path:
+        return
+
+    try:
+        with open(file_path[0], "r") as f:
+            data = json.load(f)
+
+        rules = data.get("animMirrorSettings", [])
+
+        if not rules:
+            cmds.warning("No settings found in file.")
+            return
+
+        load_rules_to_ui(rules)
+
+        cmds.confirmDialog(
+            title="Imported",
+            message="Settings imported.",
+            button=["OK"]
+        )
+
+    except Exception as e:
+        cmds.warning("Failed to import settings.")
+        log(e)
+
+
+# ============================================================
+# Execute
+# ============================================================
 
 def execute_from_ui(*args):
     nodes = get_selected_transforms()
@@ -620,6 +728,10 @@ def execute_from_ui(*args):
         cmds.refresh(suspend=False)
         cmds.undoInfo(closeChunk=True)
 
+
+# ============================================================
+# UI
+# ============================================================
 
 def delete_rule_row(row_layout):
     for row in list(RULE_ROWS):
@@ -680,7 +792,7 @@ def create_ui():
         WINDOW_NAME,
         title="Anim Mirror V4",
         sizeable=True,
-        widthHeight=(820, 420)
+        widthHeight=(820, 450)
     )
 
     main = cmds.columnLayout(
@@ -738,6 +850,30 @@ def create_ui():
 
     cmds.separator(height=8, style="in")
 
+    cmds.rowLayout(
+        numberOfColumns=3,
+        columnWidth3=(50, 50, 180),
+        columnAlign3=("left", "left", "left")
+    )
+
+    cmds.iconTextButton(
+        style="iconOnly",
+        image1="save.png",
+        width=36,
+        height=32,
+        annotation="Save Settings",
+        command=save_settings
+    )
+
+    cmds.iconTextButton(
+        style="iconOnly",
+        image1="openScript.png",
+        width=36,
+        height=32,
+        annotation="Import Settings",
+        command=import_settings
+    )
+
     cmds.button(
         label="Mirror Execute",
         width=160,
@@ -745,6 +881,8 @@ def create_ui():
         backgroundColor=(0.55, 0.85, 0.55),
         command=execute_from_ui
     )
+
+    cmds.setParent(main)
 
     cmds.text(
         label="Tip: Use tx, ty, tz, rx, ry, rz or translateX, translateY, translateZ, rotateX, rotateY, rotateZ.",
