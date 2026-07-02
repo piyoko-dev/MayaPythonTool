@@ -61,6 +61,13 @@ def remove_namespace(node):
     return name
 
 
+def get_namespace(node):
+    name = short_name(node)
+    if ":" in name:
+        return name.rsplit(":", 1)[0] + ":"
+    return ""
+
+
 def split_text(text):
     if not text:
         return []
@@ -80,6 +87,48 @@ def normalize_attrs(attrs):
     return result
 
 
+def get_transform(node):
+    if not cmds.objExists(node):
+        return None
+
+    if cmds.nodeType(node) == "transform":
+        return node
+
+    parent = cmds.listRelatives(node, parent=True, fullPath=True) or []
+    if parent:
+        return parent[0]
+
+    return None
+
+
+def get_selected_transforms():
+    selected = cmds.ls(sl=True, long=True) or []
+
+    if not selected:
+        cmds.warning("Please select objects.")
+        return []
+
+    result = []
+    exists = set()
+
+    for node in selected:
+        transform = get_transform(node)
+
+        if not transform:
+            continue
+
+        if transform in exists:
+            continue
+
+        exists.add(transform)
+        result.append(transform)
+
+    if not result:
+        cmds.warning("No valid transform selected.")
+
+    return result
+
+
 def is_finger_alias_enabled():
     if cmds.checkBox(FINGER_CHECKBOX, exists=True):
         return cmds.checkBox(FINGER_CHECKBOX, q=True, value=True)
@@ -91,6 +140,7 @@ def expand_keywords(keywords):
         return keywords
 
     result = []
+
     for keyword in keywords:
         if keyword == "Finger":
             for alias in FINGER_ALIAS_KEYWORDS:
@@ -99,6 +149,7 @@ def expand_keywords(keywords):
         else:
             if keyword not in result:
                 result.append(keyword)
+
     return result
 
 
@@ -109,6 +160,7 @@ def contains_keyword(node, keywords):
     for keyword in keywords:
         if keyword in name:
             return True
+
     return False
 
 
@@ -328,26 +380,6 @@ def scale_anim_curve(curve, start, end, scale_value):
 
     except Exception as e:
         log("scale animCurve failed : " + curve)
-        log(e)
-
-
-def scale_keys(node, attr, start, end, scale_value):
-    if not attr_is_available(node, attr):
-        return
-
-    try:
-        cmds.scaleKey(
-            node,
-            attribute=attr,
-            time=(start, end),
-            valueScale=scale_value,
-            valuePivot=0.0
-        )
-
-        log("Scaled : " + short_name(node) + "." + attr)
-
-    except Exception as e:
-        log("scaleKey failed : " + short_name(node) + "." + attr)
         log(e)
 
 
@@ -709,7 +741,7 @@ def create_ui():
         width=90,
         command=add_rule_row
     )
-    
+
     cmds.checkBox(
         FINGER_CHECKBOX,
         label="Treat Index / Thumb etc. as Finger",
