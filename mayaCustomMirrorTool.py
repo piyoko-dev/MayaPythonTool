@@ -84,12 +84,14 @@ def normalize_attrs(attrs):
 def get_transform(node):
     if not cmds.objExists(node):
         return None
+
     if cmds.nodeType(node) == "transform":
         return node
 
     parent = cmds.listRelatives(node, parent=True, fullPath=True) or []
     if parent:
         return parent[0]
+
     return None
 
 
@@ -105,16 +107,15 @@ def get_selected_transforms():
 
     for node in selected:
         transform = get_transform(node)
+
         if not transform:
             continue
+
         if transform in exists:
             continue
 
         exists.add(transform)
         result.append(transform)
-
-    if not result:
-        cmds.warning("No valid transform selected.")
 
     return result
 
@@ -149,6 +150,7 @@ def attr_exists(node, attr):
 
 def attr_is_locked(node, attr):
     plug = node + "." + attr
+
     if not cmds.objExists(plug):
         return True
 
@@ -170,6 +172,7 @@ def get_playback_range():
 
 def find_node_by_short_name(name):
     found = cmds.ls(name, type="transform", long=True) or []
+
     if found:
         return found[0]
 
@@ -183,13 +186,10 @@ def find_node_by_short_name(name):
 def get_lr_side(node):
     base = remove_namespace(node)
 
-    if base.endswith("_L"):
+    if base.endswith("_L") or base.startswith("L_"):
         return "L"
-    if base.endswith("_R"):
-        return "R"
-    if base.startswith("L_"):
-        return "L"
-    if base.startswith("R_"):
+
+    if base.endswith("_R") or base.startswith("R_"):
         return "R"
 
     return None
@@ -387,7 +387,6 @@ def set_rotation_interpolation(node):
 def mirror_single(node, invert_attrs, start, end):
     log("Single start : " + short_name(node))
 
-    invert_attrs = normalize_attrs(invert_attrs)
     curves = duplicate_node_anim_curves(node, invert_attrs)
 
     if not curves:
@@ -691,7 +690,7 @@ def create_ui():
     )
 
     cmds.text(
-        label="V4: Build pair operations first. Longest keyword wins.",
+        label="V4: Keyword / INVERT_ATTRS can be edited. Longest keyword wins.",
         align="left"
     )
 
@@ -748,7 +747,7 @@ def create_ui():
     )
 
     cmds.text(
-        label="Tip: If rules overlap, the longest matching keyword is used.",
+        label="Tip: Use tx, ty, tz, rx, ry, rz or translateX, translateY, translateZ, rotateX, rotateY, rotateZ.",
         align="left"
     )
 
